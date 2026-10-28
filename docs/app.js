@@ -1,6 +1,6 @@
 // codetel dashboard: signs in with an email link, loads daily usage through
 // the usage_daily and usage_hourly RPCs (RLS-protected), and renders tiles, a
-// chart, a calendar heatmap, an hour-by-weekday heatmap, and a table.
+// chart, a calendar heatmap, weekday and hour-of-day charts, and a table.
 
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
@@ -18,7 +18,7 @@ const state = {
   group: "tool",
   metric: "cost", // "cost" or "tokens"
   modelSlots: new Map(), // model -> slot index, fixed by all-time cost
-  chart: null,
+  charts: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -173,7 +173,7 @@ function render() {
   $("chart-note").hidden = !tokens;
   renderChart("usage-chart", days, series, tokens ? (s) => s.tokens : (s) => s.cost, tokens ? (v) => compact.format(v) : usd);
   renderCalendar();
-  renderHeatmap(days);
+  renderPatterns(days);
   renderTable(inRange);
   $("status").textContent = state.rows.length === 0
     ? "No usage recorded yet, or this account is not allowed to read it."
@@ -281,11 +281,11 @@ function renderChart(canvasId, days, series, pick, fmt) {
       },
     },
   };
-  state.chart?.destroy();
-  state.chart = new Chart($(canvasId), config);
+  state.charts.usage?.destroy();
+  state.charts.usage = new Chart($(canvasId), config);
 }
 
-// ---------- heatmap ----------
+// ---------- activity patterns ----------
 
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0]; // Monday first, as Date.getDay() numbers
 const weekdayName = (dow, style) =>
@@ -301,6 +301,8 @@ function hourSpan(h) {
   const fmt = (x) => new Date(2024, 0, 1, x).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   return `${fmt(h)}–${fmt((h + 1) % 24)}`;
 }
+
+const argmax = (a) => a.reduce((best, v, i) => (v > a[best] ? i : best), 0);
 
 // Four shades by quartile of the nonzero values, as on GitHub.
 function levelOf(values) {
@@ -383,7 +385,7 @@ function renderCalendar() {
       if (v > 0) active++;
     }
     const el = document.createElement("div");
-    el.className = `cal-cell lvl-${level(v)}`;
+    el.className = `cal-cell cal-${level(v)}`;
     el.dataset.day = key;
     state.calCells.set(key, c);
     place(el, (i % 7) + 2, week + 2);
@@ -395,63 +397,88 @@ function renderCalendar() {
   wrap.scrollLeft = wrap.scrollWidth;
 }
 
-function renderHeatmap(days) {
+// Average per day by weekday and by hour, from the hourly rows in range.
+// Weekdays are averaged over how often each occurs in the range.
+function renderPatterns(days) {
   const pick = metricPick();
-  // cells[dow][hour], summed over every matching day in range
-  const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ requests: 0, tokens: 0, cost: 0 })));
+  const fmt = metricFmt();
+  const zero = () => ({ requests: 0, tokens: 0, cost: 0 });
+  const byDow = Array.from({ length: 7 }, zero);
+  const byHour = Array.from({ length: 24 }, zero);
   const first = days[0], last = days[days.length - 1];
   for (const r of state.hourly) {
     if (r.day < first || r.day > last) continue;
-    const c = cells[new Date(r.day + "T00:00:00").getDay()][r.hour];
-    c.requests += r.requests;
-    c.tokens += r.tokens;
-    c.cost += r.cost;
-  }
-  const max = Math.max(0, ...cells.flat().map(pick));
-  const level = levelOf(cells.flat().map(pick));
-
-  const grid = $("heatmap");
-  grid.replaceChildren();
-  grid.append(document.createElement("div"));
-  for (let h = 0; h < 24; h++) {
-    const el = document.createElement("div");
-    el.className = "heat-hour";
-    el.textContent = h % 3 === 0 ? hourLabel(h) : "";
-    grid.append(el);
-  }
-  for (const dow of WEEKDAYS) {
-    const label = document.createElement("div");
-    label.className = "heat-day";
-    label.textContent = weekdayName(dow, "short");
-    grid.append(label);
-    for (let h = 0; h < 24; h++) {
-      const c = cells[dow][h];
-      const el = document.createElement("div");
-      el.className = `heat-cell lvl-${level(pick(c))}`;
-      el.dataset.dow = dow;
-      el.dataset.hour = h;
-      grid.append(el);
+    for (const c of [byDow[new Date(r.day + "T00:00:00").getDay()], byHour[r.hour]]) {
+      c.requests += r.requests;
+      c.tokens += r.tokens;
+      c.cost += r.cost;
     }
   }
-  grid.setAttribute("aria-label", `${metricName()} by weekday and hour of day`);
-  state.heatCells = cells;
+  const dowCount = Array(7).fill(0);
+  for (const d of days) dowCount[new Date(d + "T00:00:00").getDay()]++;
+  const avg = (c, n) => ({ requests: c.requests / n, tokens: c.tokens / n, cost: c.cost / n });
+  const dowAvg = WEEKDAYS.map((dow) => avg(byDow[dow], Math.max(1, dowCount[dow])));
+  const hourAvg = byHour.map((c) => avg(c, days.length));
 
-  $("heat-sub").textContent = `${metricName()} by weekday and hour, ${rangeLabel()}, ${TZ} time.`;
+  const any = dowAvg.some((c) => pick(c) > 0);
+  const peakDow = argmax(dowAvg.map(pick)), peakHour = argmax(hourAvg.map(pick));
+  const per = `${metricName()} per day on average, ${rangeLabel()}`;
+  $("dow-sub").textContent = any ? `${per}. Busiest: ${weekdayName(WEEKDAYS[peakDow], "long")}.` : `${per}.`;
+  $("hour-sub").textContent = any ? `${per}, ${TZ} time. Busiest: ${hourSpan(peakHour)}.` : `${per}, ${TZ} time.`;
 
-  const byHour = Array.from({ length: 24 }, (_, h) => cells.reduce((s, row) => s + pick(row[h]), 0));
-  const byDay = cells.map((row) => row.reduce((s, c) => s + pick(c), 0));
-  const argmax = (a) => a.reduce((best, v, i) => (v > a[best] ? i : best), 0);
-  $("heat-busiest").textContent = max > 0
-    ? `Busiest hour: ${hourSpan(argmax(byHour))}. Busiest day: ${weekdayName(argmax(byDay), "long")}.`
-    : "No usage in this range.";
+  renderBars("dow", "dow-chart", WEEKDAYS.map((d) => weekdayName(d, "short")), dowAvg, any ? peakDow : -1, fmt,
+    (i) => weekdayName(WEEKDAYS[i], "long"));
+  renderBars("hour", "hour-chart", Array.from({ length: 24 }, (_, h) => hourLabel(h)), hourAvg, any ? peakHour : -1, fmt,
+    (i) => hourSpan(i));
+}
+
+// One-series bar chart; the peak bar is full strength, the rest lighter.
+function renderBars(name, canvasId, labels, cells, peak, fmt, title) {
+  const pick = metricPick();
+  const ink = cssVar("--text-secondary");
+  const color = cssVar("--series-1");
+  const colors = cells.map((_, i) => (i === peak ? color : color + "73"));
+  const config = {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        label: metricName(),
+        data: cells.map(pick),
+        backgroundColor: colors,
+        hoverBackgroundColor: color,
+        borderRadius: { topLeft: 4, topRight: 4 },
+        borderSkipped: "start",
+        maxBarThickness: 40,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { grid: { display: false }, border: { color: cssVar("--axis") }, ticks: { color: ink, maxRotation: 0, autoSkipPadding: 6 } },
+        y: { beginAtZero: true, grid: { color: cssVar("--grid") }, border: { display: false }, ticks: { color: ink, maxTicksLimit: 5, callback: (v) => fmt(v) } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => title(items[0].dataIndex),
+            label: (item) => ` ${fmt(item.raw)} per day`,
+            afterLabel: (item) => ` ${whole.format(Math.round(cells[item.dataIndex].requests))} requests per day`,
+          },
+        },
+      },
+    },
+  };
+  $(canvasId).setAttribute("aria-label", `${metricName()} per day on average, by ${name === "dow" ? "weekday" : "hour of day"}`);
+  state.charts[name]?.destroy();
+  state.charts[name] = new Chart($(canvasId), config);
 }
 
 function tipFor(target) {
-  const hour = target.closest(".heat-cell");
-  if (hour) {
-    const dow = Number(hour.dataset.dow), h = Number(hour.dataset.hour);
-    return cellTip(`${weekdayName(dow, "long")} ${hourSpan(h)}`, state.heatCells[dow][h], `total, ${rangeLabel()}`);
-  }
   const day = target.closest(".cal-cell");
   if (day) {
     const label = new Date(day.dataset.day + "T00:00:00")
@@ -608,10 +635,8 @@ $("metric").addEventListener("click", (e) => {
   render();
 });
 
-for (const id of ["heatmap", "calendar"]) {
-  $(id).addEventListener("pointermove", showTip);
-  $(id).addEventListener("pointerleave", () => { $("heat-tip").hidden = true; });
-}
+$("calendar").addEventListener("pointermove", showTip);
+$("calendar").addEventListener("pointerleave", () => { $("heat-tip").hidden = true; });
 
 let resizeTimer;
 addEventListener("resize", () => {

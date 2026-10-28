@@ -19,7 +19,12 @@
   --series-6: #008300;
   --series-7: #6250d6;
   --series-other: #898781;
-  --heat: var(--series-1);
+  /* GitHub's contribution greens for the calendar */
+  --cal-0: #ebedf0;
+  --cal-1: #9be9a8;
+  --cal-2: #40c463;
+  --cal-3: #30a14e;
+  --cal-4: #216e39;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -44,6 +49,11 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-other: #898781;
+    --cal-0: #2c2c2a;
+    --cal-1: #0e4429;
+    --cal-2: #006d32;
+    --cal-3: #26a641;
+    --cal-4: #39d353;
   }
 }
 
@@ -68,6 +78,11 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-other: #898781;
+  --cal-0: #2c2c2a;
+  --cal-1: #0e4429;
+  --cal-2: #006d32;
+  --cal-3: #26a641;
+  --cal-4: #39d353;
 }
 
 * { box-sizing: border-box; }
@@ -170,22 +185,10 @@ input {
 .chart { position: relative; height: 280px; }
 
 .heat-sub { margin: 0 0 12px; }
-.heatmap {
-  display: grid;
-  grid-template-columns: 3.2em repeat(24, minmax(0, 1fr));
-  gap: 2px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.heat-hour { text-align: left; white-space: nowrap; overflow: visible; }
-.heat-day { align-self: center; }
-.heat-cell { height: 22px; border-radius: 3px; }
-.heat-cell:hover, .cal-cell:hover { outline: 2px solid var(--text-primary); outline-offset: -1px; }
-.lvl-0 { background: var(--grid); }
-.lvl-1 { background: color-mix(in oklab, var(--heat) 22%, var(--surface)); }
-.lvl-2 { background: color-mix(in oklab, var(--heat) 46%, var(--surface)); }
-.lvl-3 { background: color-mix(in oklab, var(--heat) 72%, var(--surface)); }
-.lvl-4 { background: var(--heat); }
+.cal-cell:hover { outline: 2px solid var(--text-primary); outline-offset: -1px; }
+.pair { display: grid; grid-template-columns: 2fr 3fr; gap: 16px; margin-bottom: 16px; }
+.pair .card { margin-bottom: 0; min-width: 0; }
+.chart-sm { height: 220px; }
 .cal-wrap { overflow-x: auto; padding-bottom: 4px; }
 .calendar {
   display: grid;
@@ -208,6 +211,11 @@ input {
   background: var(--surface);
 }
 .cal-cell { border-radius: 2px; }
+.cal-0 { background: var(--cal-0); }
+.cal-1 { background: var(--cal-1); }
+.cal-2 { background: var(--cal-2); }
+.cal-3 { background: var(--cal-3); }
+.cal-4 { background: var(--cal-4); }
 .heat-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .heat-scale { display: flex; align-items: center; gap: 3px; margin: 8px 0 0; }
 .heat-scale i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
@@ -236,8 +244,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .partial { color: var(--warning-ink); }
 
 @media (max-width: 720px) {
-  .heatmap { font-size: 10px; grid-template-columns: 2.6em repeat(24, minmax(0, 1fr)); gap: 1px; }
-  .heat-cell { height: 16px; border-radius: 2px; }
+  .pair { grid-template-columns: minmax(0, 1fr); }
+  .chart-sm { height: 200px; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tile-value { font-size: 20px; }
   #refresh { margin-left: 0; }
