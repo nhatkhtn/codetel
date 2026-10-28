@@ -101,8 +101,13 @@ async function fetchRows() {
     cached: Number(r.cached_input_tokens),
     cacheWrite: Number(r.cache_write_tokens),
     output: Number(r.output_tokens),
+    reasoning: Number(r.reasoning_output_tokens),
     cost: Number(r.cost_usd),
     unpriced: Number(r.unpriced_requests),
+    inputCost: Number(r.input_cost_usd),
+    cachedCost: Number(r.cache_read_cost_usd),
+    cacheWriteCost: Number(r.cache_write_cost_usd),
+    outputCost: Number(r.output_cost_usd),
   }));
 }
 
@@ -220,54 +225,75 @@ function renderTiles(rows) {
   $("kpi-output").textContent = compact.format(output);
 }
 
-// Pie of what makes up the open tile's total. Cost, requests and output split
-// by tool or model (the "Group by" switch); input splits by token type.
+// Cost and requests: a pie split by tool or model (the "Group by" switch).
+// Input and output: one full-width bar per tool or model, sliced by token type,
+// in tokens or in cost (the Cost / Tokens switch).
+const reasoningShare = (r) => (r.output ? r.reasoning / r.output : 0);
 const BREAKDOWNS = {
   cost: { title: "Estimated cost", fmt: (v) => usd(v), pick: (r) => r.cost },
   requests: { title: "Requests", fmt: (v) => whole.format(v), pick: (r) => r.requests },
-  output: { title: "Output tokens", fmt: (v) => compact.format(v), pick: (r) => r.output },
-  input: { title: "Input tokens", fmt: (v) => compact.format(v), byType: true },
+  input: { title: "Input", types: [
+    { label: "Cache reads", color: "--series-1", tokens: (r) => r.cached, cost: (r) => r.cachedCost },
+    { label: "Uncached input", color: "--series-5", tokens: (r) => r.input, cost: (r) => r.inputCost },
+    { label: "Cache writes", color: "--series-7", tokens: (r) => r.cacheWrite, cost: (r) => r.cacheWriteCost },
+  ] },
+  // Claude Code does not report reasoning separately, so its output stays whole.
+  // Reasoning is billed as output, so its cost is its share of the output cost.
+  output: { title: "Output", types: [
+    { label: "Response", color: "--series-1",
+      tokens: (r) => (r.tool === "claude_code" ? 0 : r.output - r.reasoning),
+      cost: (r) => (r.tool === "claude_code" ? 0 : r.outputCost * (1 - reasoningShare(r))) },
+    { label: "Reasoning", color: "--series-5",
+      tokens: (r) => (r.tool === "claude_code" ? 0 : r.reasoning),
+      cost: (r) => (r.tool === "claude_code" ? 0 : r.outputCost * reasoningShare(r)) },
+    { label: "Not split (Claude)", color: "--series-other",
+      tokens: (r) => (r.tool === "claude_code" ? r.output : 0),
+      cost: (r) => (r.tool === "claude_code" ? r.outputCost : 0) },
+  ] },
 };
-const INPUT_TYPES = [
-  { key: "cached", label: "Cache reads", color: "--series-1" },
-  { key: "input", label: "Uncached input", color: "--series-5" },
-  { key: "cacheWrite", label: "Cache writes", color: "--series-7" },
-];
 
-function breakdownSlices(rows, b) {
-  if (b.byType) {
-    return INPUT_TYPES.map((t) => ({ label: t.label, color: t.color, value: rows.reduce((s, r) => s + r[t.key], 0) }));
-  }
-  const slices = new Map();
+function share(v, total) {
+  return total ? `${((v / total) * 100).toFixed(v / total < 0.1 ? 1 : 0)}%` : "";
+}
+
+// Groups rows by tool or model; largest first, "Other ... models" last.
+function groupSeries(rows, pick) {
+  const groups = new Map();
   for (const r of rows) {
     const s = seriesOf(r);
-    const e = slices.get(s.key) ?? { label: s.label, color: s.color, other: s.other, value: 0 };
-    e.value += b.pick(r);
-    slices.set(s.key, e);
+    const e = groups.get(s.key) ?? { label: s.label, color: s.color, other: s.other, rows: [], value: 0 };
+    e.rows.push(r);
+    e.value += pick(r);
+    groups.set(s.key, e);
   }
-  return [...slices.values()];
+  return [...groups.values()]
+    .filter((x) => x.value > 0)
+    .sort((x, y) => !!x.other - !!y.other || y.value - x.value);
 }
 
 function renderBreakdown(rows) {
   for (const t of document.querySelectorAll(".tile[data-kpi]")) {
     t.setAttribute("aria-expanded", String(t.dataset.kpi === state.breakdown));
   }
-  const panel = $("breakdown");
-  panel.hidden = !state.breakdown;
-  if (!state.breakdown) {
+  $("breakdown").hidden = !state.breakdown;
+  const b = BREAKDOWNS[state.breakdown];
+  if (!b?.types) {
     state.charts.breakdown?.destroy();
     delete state.charts.breakdown;
-    return;
   }
-  const b = BREAKDOWNS[state.breakdown];
-  // Largest first; "Other ... models" stays last.
-  const slices = breakdownSlices(rows, b)
-    .filter((x) => x.value > 0)
-    .sort((x, y) => !!x.other - !!y.other || y.value - x.value);
+  if (!b) return;
+  const by = state.group === "tool" ? "tool" : "model";
+  const what = b.types ? `${b.title} ${state.metric === "tokens" ? "tokens" : "cost"} by type and` : `${b.title} by`;
+  $("bd-title").textContent = `${what} ${by}, ${rangeLabel()}`;
+  $("bd-pie-view").hidden = !!b.types;
+  $("bd-bar-view").hidden = !b.types;
+  if (b.types) renderSlicedBars(rows, b);
+  else renderPie(rows, b);
+}
+
+function renderPie(rows, b) {
+  const slices = groupSeries(rows, b.pick);
   const total = slices.reduce((s, x) => s + x.value, 0);
-  const by = b.byType ? "by token type" : state.group === "tool" ? "by tool" : "by model";
-  $("bd-title").textContent = `${b.title} ${by}, ${rangeLabel()}`;
-  const pct = (v) => (total ? `${((v / total) * 100).toFixed(v / total < 0.1 ? 1 : 0)}%` : "");
 
   const body = $("bd-rows");
   body.replaceChildren();
@@ -283,7 +309,7 @@ function renderBreakdown(rows) {
     val.textContent = b.fmt(x.value);
     const p = document.createElement("td");
     p.className = "num pct";
-    p.textContent = pct(x.value);
+    p.textContent = share(x.value, total);
     tr.append(name, val, p);
     body.append(tr);
   }
@@ -315,13 +341,85 @@ function renderBreakdown(rows) {
       cutout: "55%",
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (item) => ` ${b.fmt(item.raw)} (${pct(item.raw)})` } },
+        tooltip: { callbacks: { label: (item) => ` ${b.fmt(item.raw)} (${share(item.raw, total)})` } },
       },
     },
   };
   $("bd-chart").setAttribute("aria-label", $("bd-title").textContent);
   state.charts.breakdown?.destroy();
   state.charts.breakdown = new Chart($("bd-chart"), config);
+}
+
+// Every bar is full width, so the bars compare the mix of token types, not size;
+// the row total sits beside each bar.
+function renderSlicedBars(rows, b) {
+  const tokens = state.metric === "tokens";
+  const picks = b.types.map((t) => (tokens ? t.tokens : t.cost));
+  const fmt = tokens ? (v) => compact.format(v) : usd;
+  const sumTypes = (rs) => picks.map((pick) => rs.reduce((s, r) => s + pick(r), 0));
+  const groups = groupSeries(rows, (r) => picks.reduce((s, pick) => s + pick(r), 0));
+  const lines = [{ label: "Total", total: true, parts: sumTypes(rows) }, ...groups.map((g) => ({ ...g, parts: sumTypes(g.rows) }))];
+  const used = b.types.map((_, i) => lines[0].parts[i] > 0);
+  state.bdLines = lines;
+  state.bdTypes = b.types;
+  state.bdFmt = tokens ? (v) => `${whole.format(v)} tokens` : usd;
+
+  const legend = $("bd-legend");
+  legend.replaceChildren();
+  b.types.forEach((t, i) => {
+    if (!used[i]) return;
+    const item = document.createElement("span");
+    const sw = document.createElement("i");
+    sw.style.background = seriesColor(t.color);
+    item.append(sw, `${t.label} ${share(lines[0].parts[i], lines[0].parts.reduce((a, c) => a + c, 0))}`);
+    legend.append(item);
+  });
+
+  const list = $("bd-bars");
+  list.replaceChildren();
+  if (!groups.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "Nothing in this range.";
+    list.append(empty);
+    return;
+  }
+  lines.forEach((line, li) => {
+    const total = line.parts.reduce((a, c) => a + c, 0);
+    const row = document.createElement("div");
+    row.className = line.total ? "bd-line bd-total" : "bd-line";
+    const name = document.createElement("div");
+    name.className = "bd-name";
+    if (!line.total) {
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = seriesColor(line.color);
+      name.append(sw);
+    }
+    name.append(line.label);
+    name.title = line.label;
+    const val = document.createElement("div");
+    val.className = "bd-val";
+    val.textContent = fmt(total);
+    const bar = document.createElement("div");
+    bar.className = "bd-bar";
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", `${line.label}: ` + b.types
+      .map((t, i) => (line.parts[i] ? `${t.label} ${share(line.parts[i], total)}` : null))
+      .filter(Boolean).join(", "));
+    b.types.forEach((t, i) => {
+      if (!line.parts[i]) return;
+      const seg = document.createElement("span");
+      seg.className = "bd-seg";
+      seg.style.flexGrow = String((line.parts[i] / total) * 100);
+      seg.style.background = seriesColor(t.color);
+      seg.dataset.line = String(li);
+      seg.dataset.type = String(i);
+      bar.append(seg);
+    });
+    row.append(name, bar, val);
+    list.append(row);
+  });
 }
 
 function rangeLabel() {
@@ -603,6 +701,17 @@ function renderBars(name, canvasId, labels, cells, peak, fmt, title) {
 }
 
 function tipFor(target) {
+  const seg = target.closest(".bd-seg");
+  if (seg) {
+    const line = state.bdLines[Number(seg.dataset.line)];
+    const i = Number(seg.dataset.type);
+    const total = line.parts.reduce((a, c) => a + c, 0);
+    return {
+      head: `${line.label} · ${state.bdTypes[i].label}`,
+      lines: [state.bdFmt(line.parts[i]), `${share(line.parts[i], total)} of this row`],
+      note: "",
+    };
+  }
   const day = target.closest(".cal-cell");
   if (day) {
     const label = new Date(day.dataset.day + "T00:00:00")
@@ -793,6 +902,8 @@ $("metric").addEventListener("click", (e) => {
 
 $("calendar").addEventListener("pointermove", showTip);
 $("calendar").addEventListener("pointerleave", () => { $("heat-tip").hidden = true; });
+$("bd-bars").addEventListener("pointermove", showTip);
+$("bd-bars").addEventListener("pointerleave", () => { $("heat-tip").hidden = true; });
 
 let resizeTimer;
 addEventListener("resize", () => {

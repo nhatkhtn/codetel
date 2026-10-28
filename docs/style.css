@@ -201,6 +201,20 @@ input {
 .bd-table { width: auto; flex: 0 1 460px; min-width: 260px; }
 .bd-table td { border-bottom: 1px solid var(--grid); }
 .bd-table td.pct { color: var(--text-secondary); }
+.bd-body[hidden] { display: none; }
+.bd-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.bd-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.bd-bars { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; }
+.bd-line { display: contents; }
+.bd-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-total .bd-name { font-weight: 600; }
+.bd-val { font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.bd-bar { display: flex; gap: 2px; height: 16px; }
+.bd-seg { flex: 1 1 0; min-width: 2px; }
+.bd-seg:first-child { border-radius: 4px 0 0 4px; }
+.bd-seg:last-child { border-radius: 0 4px 4px 0; }
+.bd-seg:only-child { border-radius: 4px; }
+.bd-seg:hover { filter: brightness(1.1); }
 
 .notice {
   background: var(--warning-wash);
@@ -283,4 +297,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .bd-body { justify-content: center; gap: 16px; }
   .bd-pie { width: 180px; height: 180px; }
   .bd-table { min-width: 0; width: 100%; }
+  .bd-bars { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+  .bd-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name val" "bar bar"; gap: 4px 12px; }
+  .bd-name { grid-area: name; }
+  .bd-val { grid-area: val; }
+  .bd-bar { grid-area: bar; }
 }

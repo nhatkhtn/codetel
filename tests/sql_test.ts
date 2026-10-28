@@ -140,6 +140,34 @@ Deno.test("usage_daily sums known costs and counts unpriced requests", async () 
   ]);
 });
 
+Deno.test("usage_daily splits cost by token type, scaled to a reported cost", async () => {
+  const db = await setup();
+  await ingest(db, [], [
+    usage({ id: "a" }),
+    usage({ id: "rep", tool: "claude_code", model: "claude-haiku-5-5", cache_write_tokens: 1000, reported_cost_usd: 0.01 }),
+    usage({ id: "odd", tool: "claude_code", model: "unpriced-model", reported_cost_usd: 0.5 }),
+  ]);
+  const r = await db.query<Record<string, string>>(
+    `select model, cost_usd::text, input_cost_usd::text, cache_read_cost_usd::text,
+       cache_write_cost_usd::text, output_cost_usd::text
+     from public.usage_daily('2026-10-01', '2026-10-03') order by model`,
+  );
+  const parts = Object.fromEntries(r.rows.map((x) => [x.model, [
+    Number(x.cost_usd), Number(x.input_cost_usd), Number(x.cache_read_cost_usd),
+    Number(x.cache_write_cost_usd), Number(x.output_cost_usd),
+  ]]));
+  // Price table only: 1000 input, 2000 cached, 100 output tokens.
+  const [cost, ...sol] = parts["gpt-6.1-sol"];
+  assertAlmostEquals(cost, 0.0032, 1e-12);
+  [0.002, 0.0002, 0, 0.001].forEach((v, i) => assertAlmostEquals(sol[i], v, 1e-12));
+  // Reported $0.01 split in the price-table ratio 0.0001 : 0.00002 : 0.000125 : 0.00005.
+  const [repCost, ...rep] = parts["claude-haiku-5-5"];
+  assertAlmostEquals(repCost, 0.01, 1e-12);
+  [0.0001, 0.00002, 0.000125, 0.00005].forEach((v, i) => assertAlmostEquals(rep[i], (v / 0.000295) * 0.01, 1e-12));
+  // A reported cost with no price stays unsplit.
+  assertEquals(parts["unpriced-model"], [0.5, 0, 0, 0, 0]);
+});
+
 Deno.test("usage_hourly buckets by local day and hour", async () => {
   const db = await setup();
   await ingest(db, [], [

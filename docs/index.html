@@ -83,9 +83,13 @@
 
       <section class="card breakdown" id="breakdown" hidden>
         <h2 id="bd-title"></h2>
-        <div class="bd-body">
+        <div class="bd-body" id="bd-pie-view">
           <div class="bd-pie"><canvas id="bd-chart" role="img"></canvas></div>
           <table class="bd-table"><tbody id="bd-rows"></tbody></table>
+        </div>
+        <div id="bd-bar-view" hidden>
+          <div class="bd-legend" id="bd-legend"></div>
+          <div class="bd-bars" id="bd-bars"></div>
         </div>
       </section>
 
