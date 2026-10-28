@@ -1,0 +1,6 @@
+project_id = "codetel"
+
+# The ingest function checks its own upload secret; OTel exporters cannot
+# send a Supabase JWT.
+[functions.ingest]
+verify_jwt = false

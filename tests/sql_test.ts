@@ -1,0 +1,185 @@
+// Runs the migration on PGlite (in-process Postgres) with minimal stand-ins
+// for Supabase's roles and auth.uid().
+
+import { assert, assertAlmostEquals, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { PGlite } from "npm:@electric-sql/pglite@0.5.10";
+
+const MIGRATION = Deno.readTextFileSync(
+  new URL("../supabase/migrations/20261028182432_init.sql", import.meta.url),
+);
+const SUPABASE_STANDINS = `
+  create role anon nologin;
+  create role authenticated nologin;
+  create schema auth;
+  grant usage on schema auth to anon, authenticated;
+  create function auth.uid() returns uuid language sql stable as
+    $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  grant usage on schema public to anon, authenticated;
+`;
+const OWNER = "11111111-1111-4111-8111-111111111111";
+const STRANGER = "22222222-2222-4222-8222-222222222222";
+
+function usage(over: Record<string, unknown>) {
+  return {
+    id: "r1",
+    occurred_at: "2026-10-01T12:00:00Z",
+    tool: "codex",
+    model: "gpt-6.1-sol",
+    session_id: "s1",
+    turn_id: null,
+    request_id: null,
+    input_tokens: 1000,
+    cached_input_tokens: 2000,
+    cache_write_tokens: 0,
+    cache_write_5m_tokens: null,
+    cache_write_1h_tokens: null,
+    output_tokens: 100,
+    reasoning_output_tokens: 10,
+    reported_cost_usd: null,
+    ...over,
+  };
+}
+
+async function setup(): Promise<PGlite> {
+  const db = new PGlite();
+  await db.exec(SUPABASE_STANDINS);
+  await db.exec(MIGRATION);
+  await db.exec(`
+    insert into public.model_pricing values
+      ('gpt-6.1-sol', '2026-01-01', 0,      2.00, 0.10, 2.50, 5.00, 10.00),
+      ('gpt-6.1-sol', '2026-01-01', 272001, 4.00, 0.20, 5.00, 10.00, 15.00),
+      ('claude-haiku-5-5', '2026-01-01', 0, 0.10, 0.01, 0.125, 0.20, 0.50),
+      ('claude-haiku-5-5', '2026-01-01', 100001, 0.50, 0.05, 0.625, 1.00, 2.50);
+    insert into public.dashboard_users values ('${OWNER}');
+  `);
+  return db;
+}
+
+async function ingest(db: PGlite, records: unknown[], rows: unknown[]) {
+  const r = await db.query<{ records_inserted: number; usage_inserted: number }>(
+    "select * from private.ingest($1::jsonb, $2::jsonb)",
+    [JSON.stringify(records), JSON.stringify(rows)],
+  );
+  return r.rows[0];
+}
+
+async function cost(db: PGlite, id: string): Promise<number | null> {
+  const r = await db.query<{ c: string | null }>(
+    "select estimated_cost_usd::text as c from public.usage_with_cost where id = $1",
+    [id],
+  );
+  return r.rows[0].c == null ? null : Number(r.rows[0].c);
+}
+
+Deno.test("ingest is idempotent", async () => {
+  const db = await setup();
+  const records = [{ id: "log:a", occurred_at: "2026-10-01T12:00:00Z", name: "x", payload: { a: 1 } }];
+  const first = await ingest(db, records, [usage({})]);
+  assertEquals([Number(first.records_inserted), Number(first.usage_inserted)], [1, 1]);
+  const again = await ingest(db, records, [usage({})]);
+  assertEquals([Number(again.records_inserted), Number(again.usage_inserted)], [0, 0]);
+});
+
+Deno.test("cost uses rates in effect, size tier, and reported cost first", async () => {
+  const db = await setup();
+  await ingest(db, [], [
+    usage({ id: "small" }),
+    usage({ id: "large", input_tokens: 100000, cached_input_tokens: 200000 }),
+    usage({ id: "before-prices", occurred_at: "2025-12-31T00:00:00Z" }),
+    usage({ id: "unknown-model", model: "codex-auto-review" }),
+    usage({ id: "reported", tool: "claude_code", model: "claude-opus-5-5", reported_cost_usd: 0.42 }),
+    usage({
+      id: "haiku",
+      tool: "claude_code",
+      model: "claude-haiku-5-5",
+      input_tokens: 10,
+      cached_input_tokens: 1000,
+      cache_write_tokens: 300,
+      cache_write_5m_tokens: 100,
+      cache_write_1h_tokens: 200,
+      output_tokens: 50,
+    }),
+  ]);
+  // 1000*2 + 2000*0.10 + 100*10 = 3200 per million
+  assertAlmostEquals((await cost(db, "small"))!, 0.0032, 1e-12);
+  // prompt 300000 > 272000: 100000*4 + 200000*0.20 + 100*15
+  assertAlmostEquals((await cost(db, "large"))!, 0.4415, 1e-12);
+  assertEquals(await cost(db, "before-prices"), null);
+  assertEquals(await cost(db, "unknown-model"), null);
+  assertAlmostEquals((await cost(db, "reported"))!, 0.42, 1e-12);
+  // 10*0.10 + 1000*0.01 + 100*0.125 + 200*0.20 + 50*0.50 = 88.5 per million
+  assertAlmostEquals((await cost(db, "haiku"))!, 0.0000885, 1e-12);
+});
+
+Deno.test("codex cache writes use the short cache-write rate", async () => {
+  const db = await setup();
+  await ingest(db, [], [usage({ id: "cw", input_tokens: 0, cached_input_tokens: 0, cache_write_tokens: 1000, output_tokens: 0 })]);
+  assertAlmostEquals((await cost(db, "cw"))!, 0.0025, 1e-12);
+});
+
+Deno.test("usage_daily sums known costs and counts unpriced requests", async () => {
+  const db = await setup();
+  await ingest(db, [], [
+    usage({ id: "a" }),
+    usage({ id: "b" }),
+    usage({ id: "c", model: "codex-auto-review" }),
+    usage({ id: "late", occurred_at: "2026-10-02T03:00:00Z" }),
+  ]);
+  const r = await db.query<Record<string, string>>(
+    `select day::text, model, requests::int, cost_usd::text, unpriced_requests::int
+     from public.usage_daily('2026-10-01', '2026-10-03', 'America/New_York') order by model, day`,
+  );
+  // 03:00 UTC on Oct 2 is Oct 1 in New York, so all rows land on Oct 1.
+  assertEquals(r.rows.map((x) => [x.day, x.model, x.requests, Number(x.cost_usd), x.unpriced_requests]), [
+    ["2026-10-01", "codex-auto-review", 1, 0, 1],
+    ["2026-10-01", "gpt-6.1-sol", 3, 0.0096, 0],
+  ]);
+});
+
+Deno.test("only listed dashboard users can read; nobody else can write", async () => {
+  const db = await setup();
+  await ingest(db, [{ id: "log:a", occurred_at: null, name: "x", payload: {} }], [usage({})]);
+  const countAs = async (role: string, sub: string, table: string) => {
+    await db.exec(`set role ${role}; set request.jwt.claim.sub = '${sub}';`);
+    try {
+      return Number((await db.query<{ n: number }>(`select count(*)::int as n from ${table}`)).rows[0].n);
+    } finally {
+      await db.exec("reset role; reset request.jwt.claim.sub;");
+    }
+  };
+  for (const table of ["public.usage_events", "public.usage_with_cost", "public.telemetry_records", "public.model_pricing"]) {
+    assert((await countAs("authenticated", OWNER, table)) > 0, `owner reads ${table}`);
+    assertEquals(await countAs("authenticated", STRANGER, table), 0, `stranger sees nothing in ${table}`);
+  }
+  await db.exec("set role authenticated; set request.jwt.claim.sub = '" + OWNER + "';");
+  try {
+    await assertRejects(() => db.query("insert into public.usage_events (id) values ('x')"));
+    await assertRejects(() => db.query("select * from private.ingest('[]', '[]')"));
+    await assertRejects(() => db.query("select * from public.dashboard_users"));
+  } finally {
+    await db.exec("reset role; reset request.jwt.claim.sub;");
+  }
+  await db.exec("set role anon;");
+  try {
+    await assertRejects(() => db.query("select * from public.usage_events"));
+    await assertRejects(() => db.query("select * from public.usage_daily(now() - interval '1 day', now())"));
+  } finally {
+    await db.exec("reset role;");
+  }
+});
+
+Deno.test("pricing file loads and has a base row for every model", async () => {
+  const db = new PGlite();
+  await db.exec(SUPABASE_STANDINS);
+  await db.exec(MIGRATION);
+  const pricing = Deno.readTextFileSync(new URL("../supabase/pricing.sql", import.meta.url));
+  await db.exec(pricing);
+  await db.exec(pricing); // re-running updates in place
+  const r = await db.query<{ missing: number; rows: number }>(
+    `select count(*) filter (where not exists (
+       select 1 from public.model_pricing b where b.model = p.model and b.effective_from = p.effective_from and b.min_prompt_tokens = 0
+     ))::int as missing, count(*)::int as rows from public.model_pricing p`,
+  );
+  assertEquals(r.rows[0].missing, 0);
+  assertEquals(r.rows[0].rows, 22);
+});

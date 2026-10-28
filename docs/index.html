@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codetel</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.min.js"
+    integrity="sha384-dl/4LkSyQ4uEucc48NM6VDZLAjLLq9yMzZ5JLXumBq7Ld33XBof73hseOqPhO89+"
+    crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+    integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+    crossorigin="anonymous"></script>
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>codetel</h1>
+      <p class="subtitle">Claude Code and Codex usage</p>
+    </div>
+    <div class="top-actions">
+      <span id="who" class="muted"></span>
+      <button id="sign-out" class="ghost" hidden>Sign out</button>
+      <button id="theme" class="ghost" aria-label="Toggle theme">Theme</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="login" class="card login" hidden>
+      <h2>Sign in</h2>
+      <p class="muted">A sign-in link will be sent by email.</p>
+      <form id="login-form">
+        <label for="email">Email</label>
+        <div class="row">
+          <input id="email" type="email" autocomplete="email" required>
+          <button type="submit">Send link</button>
+        </div>
+      </form>
+      <p id="login-status" class="muted" role="status"></p>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="filters">
+        <div class="segmented" role="group" aria-label="Date range" id="range">
+          <button data-days="7">7 days</button>
+          <button data-days="30">30 days</button>
+          <button data-days="90">90 days</button>
+          <button data-days="365">1 year</button>
+          <button data-days="0">All</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Group by" id="group">
+          <button data-group="tool">By tool</button>
+          <button data-group="model">By model</button>
+        </div>
+        <button id="refresh" class="ghost">Refresh</button>
+      </div>
+
+      <p id="status" class="muted" role="status"></p>
+
+      <div class="tiles">
+        <div class="tile"><div class="tile-label">Estimated cost</div><div class="tile-value" id="kpi-cost">–</div><div class="tile-note" id="kpi-cost-note"></div></div>
+        <div class="tile"><div class="tile-label">Requests</div><div class="tile-value" id="kpi-requests">–</div><div class="tile-note" id="kpi-requests-note"></div></div>
+        <div class="tile"><div class="tile-label">Input tokens</div><div class="tile-value" id="kpi-input">–</div><div class="tile-note" id="kpi-input-note"></div></div>
+        <div class="tile"><div class="tile-label">Output tokens</div><div class="tile-value" id="kpi-output">–</div><div class="tile-note" id="kpi-output-note"></div></div>
+      </div>
+
+      <div id="unpriced" class="notice" hidden></div>
+
+      <section class="card">
+        <h2>Estimated cost per day</h2>
+        <div class="chart"><canvas id="cost-chart" aria-label="Estimated cost per day" role="img"></canvas></div>
+      </section>
+
+      <section class="card">
+        <h2>Tokens per day</h2>
+        <p class="muted small">Uncached input, cached input, cache writes, and output combined.</p>
+        <div class="chart"><canvas id="token-chart" aria-label="Tokens per day" role="img"></canvas></div>
+      </section>
+
+      <section class="card">
+        <h2>By model</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th><th>Tool</th><th class="num">Requests</th><th class="num">Uncached input</th>
+                <th class="num">Cached input</th><th class="num">Cache writes</th><th class="num">Output</th>
+                <th class="num">Est. cost</th>
+              </tr>
+            </thead>
+            <tbody id="model-table"></tbody>
+          </table>
+        </div>
+        <p class="muted small">Costs are API-equivalent estimates: Claude Code reports its own cost; other usage is priced from the price table. Requests for models without a price are counted but not priced.</p>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
