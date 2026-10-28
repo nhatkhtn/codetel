@@ -33,8 +33,14 @@ export interface Parsed {
   usage: UsageEvent[];
 }
 
-// Log events never stored: they carry tool arguments and output, not usage.
-const DROPPED_LOG_EVENTS = new Set(["codex.tool_result"]);
+// Log events never stored: per-tool-call events carry no usage (and Codex's
+// tool results carry tool arguments and output).
+export const DROPPED_LOG_EVENTS = new Set([
+  "tool_decision",
+  "tool_result",
+  "codex.tool_decision",
+  "codex.tool_result",
+]);
 
 // The only spans stored. Codex emits ~1000 spans per turn; this one carries
 // turn ID and turn token totals, kept for debugging.

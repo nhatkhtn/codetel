@@ -2,6 +2,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   attrs,
   backfillError,
+  DROPPED_LOG_EVENTS,
   type Parsed,
   parseLogs,
   parseTraces,
@@ -61,25 +62,27 @@ Deno.test("codex: request counts per fixture", async () => {
   assertEquals((await parseAll(fixture("codex_resumed_session"))).usage.length, 1);
 });
 
-Deno.test("codex: tool_result logs are not stored, other logs are", async () => {
-  const uploads = fixture("codex_new_session");
-  const parsed = await parseAll(uploads);
-  assert(!parsed.records.some((r) => r.name === "codex.tool_result"));
-  let logs = 0, toolResults = 0;
-  for (const u of uploads.filter((u) => u.path === "/v1/logs")) {
-    // deno-lint-ignore no-explicit-any
-    for (const rl of (u.body as any).resourceLogs) {
-      for (const sl of rl.scopeLogs) {
-        for (const lr of sl.logRecords) {
-          logs++;
-          if (attrs(lr.attributes)["event.name"] === "codex.tool_result") toolResults++;
+for (const name of ["claude_session", "codex_new_session"]) {
+  Deno.test(`${name}: tool decision and result logs are not stored, other logs are`, async () => {
+    const uploads = fixture(name);
+    const parsed = await parseAll(uploads);
+    assert(!parsed.records.some((r) => DROPPED_LOG_EVENTS.has(r.name)));
+    let logs = 0, dropped = 0;
+    for (const u of uploads.filter((u) => u.path === "/v1/logs")) {
+      // deno-lint-ignore no-explicit-any
+      for (const rl of (u.body as any).resourceLogs) {
+        for (const sl of rl.scopeLogs) {
+          for (const lr of sl.logRecords) {
+            logs++;
+            if (DROPPED_LOG_EVENTS.has(String(attrs(lr.attributes)["event.name"]))) dropped++;
+          }
         }
       }
     }
-  }
-  assert(toolResults > 0, "fixture contains tool results");
-  assertEquals(parsed.records.filter((r) => r.id.startsWith("log:")).length, logs - toolResults);
-});
+    assert(dropped > 0, "fixture contains tool events");
+    assertEquals(parsed.records.filter((r) => r.id.startsWith("log:")).length, logs - dropped);
+  });
+}
 
 Deno.test("traces: only session_task.turn spans are stored", async () => {
   const parsed = await parseAll(fixture("codex_new_session"));

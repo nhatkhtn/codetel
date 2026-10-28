@@ -158,6 +158,23 @@ Deno.test("usage_hourly buckets by local day and hour", async () => {
   ]);
 });
 
+Deno.test("raw records older than 30 days are pruned; usage rows are kept", async () => {
+  const db = await setup();
+  await ingest(db, [
+    { id: "log:old", occurred_at: null, name: "x", payload: {} },
+    { id: "log:new", occurred_at: null, name: "x", payload: {} },
+  ], [usage({ id: "u-old", occurred_at: "2025-01-01T00:00:00Z" })]);
+  await db.exec(`
+    update public.telemetry_records set received_at = now() - interval '31 days' where id = 'log:old';
+  `);
+  const r = await db.query<{ n: number }>("select private.prune_telemetry_records()::int as n");
+  assertEquals(r.rows[0].n, 1);
+  const left = await db.query<{ id: string }>("select id from public.telemetry_records");
+  assertEquals(left.rows.map((x) => x.id), ["log:new"]);
+  const usageLeft = await db.query<{ n: number }>("select count(*)::int as n from public.usage_events");
+  assertEquals(usageLeft.rows[0].n, 1);
+});
+
 Deno.test("only listed dashboard users can read; nobody else can write", async () => {
   const db = await setup();
   await ingest(db, [{ id: "log:a", occurred_at: null, name: "x", payload: {} }], [usage({})]);
