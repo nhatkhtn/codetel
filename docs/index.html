@@ -128,6 +128,22 @@
         </div>
         <p class="muted small">Costs are API-equivalent estimates: Claude Code reports its own cost; other usage is priced from the price table. Requests for models without a price are counted but not priced.</p>
       </section>
+
+      <section class="card">
+        <h2>Latest 10 requests</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>Tool</th><th>Model</th><th class="num">Uncached input</th>
+                <th class="num">Cached input</th><th class="num">Cache writes</th><th class="num">Output</th>
+                <th class="num">Cost</th>
+              </tr>
+            </thead>
+            <tbody id="latest-table"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
   </main>
 </body>

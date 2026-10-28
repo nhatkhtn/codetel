@@ -19,6 +19,12 @@
   --series-6: #008300;
   --series-7: #6250d6;
   --series-other: #898781;
+  --claude-1: #eb6834;
+  --claude-2: #b0301c;
+  --claude-3: #eda100;
+  --codex-1: #1baf7a;
+  --codex-2: #2f7a00;
+  --codex-3: #00a0b8;
   /* GitHub's contribution greens for the calendar */
   --cal-0: #ebedf0;
   --cal-1: #9be9a8;
@@ -49,6 +55,12 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-other: #898781;
+    --claude-1: #d95926;
+    --claude-2: #93403d;
+    --claude-3: #af7a06;
+    --codex-1: #199e70;
+    --codex-2: #1e710f;
+    --codex-3: #299ac4;
     --cal-0: #2c2c2a;
     --cal-1: #0e4429;
     --cal-2: #006d32;
@@ -78,6 +90,12 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-other: #898781;
+  --claude-1: #d95926;
+  --claude-2: #93403d;
+  --claude-3: #af7a06;
+  --codex-1: #199e70;
+  --codex-2: #1e710f;
+  --codex-3: #299ac4;
   --cal-0: #2c2c2a;
   --cal-1: #0e4429;
   --cal-2: #006d32;

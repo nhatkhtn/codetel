@@ -1,24 +1,30 @@
 // codetel dashboard: signs in with an email link, loads daily usage through
-// the usage_daily and usage_hourly RPCs (RLS-protected), and renders tiles, a
-// chart, a calendar heatmap, weekday and hour-of-day charts, and a table.
+// the usage_daily and usage_hourly RPCs and the latest rows of usage_with_cost
+// (all RLS-protected), and renders tiles, a chart, a calendar heatmap, weekday
+// and hour-of-day charts, and tables.
 
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
 const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex" };
-// Claude Code is orange, Codex green.
-const TOOL_SLOTS = { claude_code: 1, codex: 2 };
-const SERIES_SLOTS = 7; // categorical slots; the rest fold into "Other"
+// Claude Code is orange, Codex green. By model, each tool's models get that
+// tool's color family (warm for Claude, greens for Codex): three colors each,
+// the rest fold into "Other <tool> models".
+const TOOL_COLORS = { claude_code: "--series-2", codex: "--series-3" };
+const FAMILY = { claude_code: "--claude-", codex: "--codex-" };
+const FAMILY_SIZE = 3;
+const TOOL_ORDER = { claude_code: 0, codex: 1 };
 const PAGE = 1000;
 
 const state = {
   rows: [], // all-time daily rows from usage_daily
   hourly: [], // all-time (day, hour) rows from usage_hourly
+  latest: [], // the 10 most recent requests
   days: 30,
   group: "tool",
   metric: "cost", // "cost" or "tokens"
   breakdown: null, // open tile breakdown: "cost", "requests", "input", "output"
-  modelSlots: new Map(), // model -> slot index, fixed by all-time cost
+  modelSeries: new Map(), // model -> { key, label, color, order }, fixed by all-time cost
   charts: {},
 };
 
@@ -110,32 +116,47 @@ async function fetchHourly() {
   }));
 }
 
-// Slots follow the entity: ranked once by all-time cost (then tokens), so
-// changing the range never repaints a model.
-function assignModelSlots(rows) {
+async function fetchLatest() {
+  const { data, error } = await db
+    .from("usage_with_cost")
+    .select("occurred_at, tool, model, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, estimated_cost_usd")
+    .order("occurred_at", { ascending: false })
+    .limit(10);
+  if (error) throw error;
+  return data;
+}
+
+// Colors follow the entity: models are ranked once within their tool by
+// all-time cost (then tokens), so changing the range never repaints a model.
+function assignModelSeries(rows) {
   const totals = new Map();
   for (const r of rows) {
-    const t = totals.get(r.model) ?? { cost: 0, tokens: 0 };
+    const t = totals.get(r.model) ?? { tool: r.tool, cost: 0, tokens: 0 };
     t.cost += r.cost;
     t.tokens += r.input + r.cached + r.cacheWrite + r.output;
     totals.set(r.model, t);
   }
   const ranked = [...totals.entries()].sort((a, b) => b[1].cost - a[1].cost || b[1].tokens - a[1].tokens);
-  state.modelSlots = new Map(ranked.slice(0, SERIES_SLOTS).map(([m], i) => [m, i]));
+  const rank = {};
+  state.modelSeries = new Map();
+  for (const [model, { tool }] of ranked) {
+    const i = (rank[tool] = (rank[tool] ?? -1) + 1);
+    const base = (TOOL_ORDER[tool] ?? 2) * 10;
+    state.modelSeries.set(model, i < FAMILY_SIZE && FAMILY[tool]
+      ? { key: model, label: model, color: FAMILY[tool] + (i + 1), order: base + i }
+      : { key: "__other_" + tool, label: `Other ${TOOL_NAMES[tool] ?? tool} models`, color: "--series-other", order: base + 9, other: true });
+  }
 }
 
 function seriesOf(row) {
   if (state.group === "tool") {
-    return { key: row.tool, label: TOOL_NAMES[row.tool] ?? row.tool, slot: TOOL_SLOTS[row.tool] ?? null };
+    return { key: row.tool, label: TOOL_NAMES[row.tool] ?? row.tool, color: TOOL_COLORS[row.tool] ?? "--series-other", order: TOOL_ORDER[row.tool] ?? 9 };
   }
-  const slot = state.modelSlots.get(row.model);
-  return slot == null
-    ? { key: "__other", label: "Other models", slot: null }
-    : { key: row.model, label: row.model, slot };
+  return state.modelSeries.get(row.model);
 }
 
-function seriesColor(slot) {
-  return cssVar(slot == null ? "--series-other" : `--series-${slot + 1}`);
+function seriesColor(name) {
+  return cssVar(name);
 }
 
 function rangeDays() {
@@ -177,6 +198,7 @@ function render() {
   renderCalendar();
   renderPatterns(days);
   renderTable(inRange);
+  renderLatest();
   $("status").textContent = state.rows.length === 0
     ? "No usage recorded yet, or this account is not allowed to read it."
     : "";
@@ -207,19 +229,19 @@ const BREAKDOWNS = {
   input: { title: "Input tokens", fmt: (v) => compact.format(v), byType: true },
 };
 const INPUT_TYPES = [
-  { key: "cached", label: "Cache reads", slot: 0 },
-  { key: "input", label: "Uncached input", slot: 3 },
-  { key: "cacheWrite", label: "Cache writes", slot: 6 },
+  { key: "cached", label: "Cache reads", color: "--series-1" },
+  { key: "input", label: "Uncached input", color: "--series-5" },
+  { key: "cacheWrite", label: "Cache writes", color: "--series-7" },
 ];
 
 function breakdownSlices(rows, b) {
   if (b.byType) {
-    return INPUT_TYPES.map((t) => ({ label: t.label, slot: t.slot, value: rows.reduce((s, r) => s + r[t.key], 0) }));
+    return INPUT_TYPES.map((t) => ({ label: t.label, color: t.color, value: rows.reduce((s, r) => s + r[t.key], 0) }));
   }
   const slices = new Map();
   for (const r of rows) {
     const s = seriesOf(r);
-    const e = slices.get(s.key) ?? { label: s.label, slot: s.slot, value: 0 };
+    const e = slices.get(s.key) ?? { label: s.label, color: s.color, other: s.other, value: 0 };
     e.value += b.pick(r);
     slices.set(s.key, e);
   }
@@ -238,10 +260,10 @@ function renderBreakdown(rows) {
     return;
   }
   const b = BREAKDOWNS[state.breakdown];
-  // Largest first; "Other models" stays last.
+  // Largest first; "Other ... models" stays last.
   const slices = breakdownSlices(rows, b)
     .filter((x) => x.value > 0)
-    .sort((x, y) => (x.slot == null) - (y.slot == null) || y.value - x.value);
+    .sort((x, y) => !!x.other - !!y.other || y.value - x.value);
   const total = slices.reduce((s, x) => s + x.value, 0);
   const by = b.byType ? "by token type" : state.group === "tool" ? "by tool" : "by model";
   $("bd-title").textContent = `${b.title} ${by}, ${rangeLabel()}`;
@@ -254,7 +276,7 @@ function renderBreakdown(rows) {
     const name = document.createElement("td");
     const sw = document.createElement("span");
     sw.className = "swatch";
-    sw.style.background = seriesColor(x.slot);
+    sw.style.background = seriesColor(x.color);
     name.append(sw, x.label);
     const val = document.createElement("td");
     val.className = "num";
@@ -280,8 +302,8 @@ function renderBreakdown(rows) {
       labels: slices.map((x) => x.label),
       datasets: [{
         data: slices.map((x) => x.value),
-        backgroundColor: slices.map((x) => seriesColor(x.slot)),
-        hoverBackgroundColor: slices.map((x) => seriesColor(x.slot)),
+        backgroundColor: slices.map((x) => seriesColor(x.color)),
+        hoverBackgroundColor: slices.map((x) => seriesColor(x.color)),
         borderColor: cssVar("--surface"),
         borderWidth: 2,
       }],
@@ -330,7 +352,7 @@ function buildSeries(rows, days) {
     entry.tokens[i] += r.input + r.cached + r.cacheWrite + r.output;
     entry.total += r.cost;
   }
-  return [...series.values()].sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99));
+  return [...series.values()].sort((a, b) => a.order - b.order);
 }
 
 function renderChart(canvasId, days, series, pick, fmt) {
@@ -340,8 +362,8 @@ function renderChart(canvasId, days, series, pick, fmt) {
   const datasets = series.map((s, i) => ({
     label: s.label,
     data: pick(s),
-    backgroundColor: seriesColor(s.slot),
-    hoverBackgroundColor: seriesColor(s.slot),
+    backgroundColor: seriesColor(s.color),
+    hoverBackgroundColor: seriesColor(s.color),
     // A surface-colored top edge leaves a 2px gap between stacked segments.
     borderColor: surface,
     borderWidth: { top: 2, right: 0, bottom: 0, left: 0 },
@@ -628,7 +650,6 @@ function renderTable(rows) {
   const sorted = [...byModel.values()].sort((a, b) => b.cost - a.cost || b.requests - a.requests);
   for (const m of sorted) {
     const tr = document.createElement("tr");
-    const slot = state.modelSlots.get(m.model);
     const cells = [
       [m.model, false], [TOOL_NAMES[m.tool] ?? m.tool, false], [whole.format(m.requests), true],
       [whole.format(m.input), true], [whole.format(m.cached), true], [whole.format(m.cacheWrite), true],
@@ -641,7 +662,7 @@ function renderTable(rows) {
       if (i === 0 && state.group === "model") {
         const sw = document.createElement("span");
         sw.className = "swatch";
-        sw.style.background = seriesColor(slot ?? null);
+        sw.style.background = seriesColor(state.modelSeries.get(m.model)?.color ?? "--series-other");
         td.append(sw);
       }
       td.append(text);
@@ -672,13 +693,46 @@ function renderTable(rows) {
   }
 }
 
+function renderLatest() {
+  const body = $("latest-table");
+  body.replaceChildren();
+  const time = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+  for (const r of state.latest) {
+    const tr = document.createElement("tr");
+    const when = new Date(r.occurred_at);
+    const cost = r.estimated_cost_usd == null ? "no price" : usd(Number(r.estimated_cost_usd));
+    const cells = [
+      [time.format(when), false], [TOOL_NAMES[r.tool] ?? r.tool, false], [r.model, false],
+      [whole.format(r.input_tokens), true], [whole.format(r.cached_input_tokens), true],
+      [whole.format(r.cache_write_tokens), true], [whole.format(r.output_tokens), true], [cost, true],
+    ];
+    for (const [text, num] of cells) {
+      const td = document.createElement("td");
+      if (num) td.className = "num";
+      td.textContent = text;
+      tr.append(td);
+    }
+    tr.firstChild.title = when.toString();
+    body.append(tr);
+  }
+  if (state.latest.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 8;
+    td.className = "muted";
+    td.textContent = "No requests yet.";
+    tr.append(td);
+    body.append(tr);
+  }
+}
+
 // ---------- auth & wiring ----------
 
 async function load() {
   $("status").textContent = "Loading…";
   try {
-    [state.rows, state.hourly] = await Promise.all([fetchRows(), fetchHourly()]);
-    assignModelSlots(state.rows);
+    [state.rows, state.hourly, state.latest] = await Promise.all([fetchRows(), fetchHourly(), fetchLatest()]);
+    assignModelSeries(state.rows);
     render();
   } catch (e) {
     $("status").textContent = `Could not load usage: ${e.message ?? e}`;
