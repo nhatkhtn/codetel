@@ -390,9 +390,9 @@ function renderCalendar() {
     state.calCells.set(key, c);
     place(el, (i % 7) + 2, week + 2);
   });
-  grid.setAttribute("aria-label", `${metricName()} per day over the last year`);
-  $("cal-sub").textContent = `${metricName()} per day over the last year.`;
-  $("cal-summary").textContent = `${metricFmt()(total)} in the last year, ${active} active days.`;
+  grid.setAttribute("aria-label", `${metricName()} per day over the last 12 months`);
+  $("cal-sub").textContent = `${metricName()} per day.`;
+  $("cal-summary").textContent = `${metricFmt()(total)} in total, ${active} active days.`;
   const wrap = $("cal-wrap");
   wrap.scrollLeft = wrap.scrollWidth;
 }
