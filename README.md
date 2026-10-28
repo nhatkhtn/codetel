@@ -19,7 +19,7 @@ enabled is imported once per machine by `backfill/backfill.mjs`.
 
 | Path | What |
 | --- | --- |
-| `supabase/migrations/` | Schema, cost view, `usage_daily()` RPC, `private.ingest()`, RLS |
+| `supabase/migrations/` | Schema, cost view, `usage_daily()` and `usage_hourly()` RPCs, `private.ingest()`, RLS |
 | `supabase/functions/ingest/` | Edge Function: auth, routing, gzip, DB write |
 | `supabase/functions/_shared/telemetry.ts` | OTLP parsing and usage normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |

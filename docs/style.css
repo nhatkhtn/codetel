@@ -19,6 +19,7 @@
   --series-6: #008300;
   --series-7: #6250d6;
   --series-other: #898781;
+  --heat: var(--series-1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -168,6 +169,64 @@ input {
 
 .chart { position: relative; height: 280px; }
 
+.heat-sub { margin: 0 0 12px; }
+.heatmap {
+  display: grid;
+  grid-template-columns: 3.2em repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.heat-hour { text-align: left; white-space: nowrap; overflow: visible; }
+.heat-day { align-self: center; }
+.heat-cell { height: 22px; border-radius: 3px; }
+.heat-cell:hover, .cal-cell:hover { outline: 2px solid var(--text-primary); outline-offset: -1px; }
+.lvl-0 { background: var(--grid); }
+.lvl-1 { background: color-mix(in oklab, var(--heat) 22%, var(--surface)); }
+.lvl-2 { background: color-mix(in oklab, var(--heat) 46%, var(--surface)); }
+.lvl-3 { background: color-mix(in oklab, var(--heat) 72%, var(--surface)); }
+.lvl-4 { background: var(--heat); }
+.cal-wrap { overflow-x: auto; padding-bottom: 4px; }
+.calendar {
+  display: grid;
+  gap: 3px;
+  width: max-content;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.cal-month { white-space: nowrap; overflow: visible; width: 0; }
+.cal-day {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  align-self: stretch;
+  margin-right: -3px; /* cover the grid gap */
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+  font-size: 11px;
+  background: var(--surface);
+}
+.cal-cell { border-radius: 2px; }
+.heat-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.heat-scale { display: flex; align-items: center; gap: 3px; margin: 8px 0 0; }
+.heat-scale i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.tip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 10;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+}
+.tip .tip-head { font-weight: 600; }
+.tip .tip-dim { color: var(--text-secondary); }
+
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
@@ -177,6 +236,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .partial { color: var(--warning-ink); }
 
 @media (max-width: 720px) {
+  .heatmap { font-size: 10px; grid-template-columns: 2.6em repeat(24, minmax(0, 1fr)); gap: 1px; }
+  .heat-cell { height: 16px; border-radius: 2px; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tile-value { font-size: 20px; }
   #refresh { margin-left: 0; }

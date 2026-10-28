@@ -4,9 +4,13 @@
 import { assert, assertAlmostEquals, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { PGlite } from "npm:@electric-sql/pglite@0.5.10";
 
-const MIGRATION = Deno.readTextFileSync(
-  new URL("../supabase/migrations/20261028182432_init.sql", import.meta.url),
-);
+const MIGRATIONS_DIR = new URL("../supabase/migrations/", import.meta.url);
+const MIGRATION = [...Deno.readDirSync(MIGRATIONS_DIR)]
+  .map((e) => e.name)
+  .filter((n) => n.endsWith(".sql"))
+  .sort()
+  .map((n) => Deno.readTextFileSync(new URL(n, MIGRATIONS_DIR)))
+  .join("\n");
 const SUPABASE_STANDINS = `
   create role anon nologin;
   create role authenticated nologin;
@@ -86,7 +90,7 @@ Deno.test("cost uses rates in effect, size tier, and reported cost first", async
     usage({ id: "small" }),
     usage({ id: "large", input_tokens: 100000, cached_input_tokens: 200000 }),
     usage({ id: "before-prices", occurred_at: "2025-12-31T00:00:00Z" }),
-    usage({ id: "unknown-model", model: "codex-auto-review" }),
+    usage({ id: "unknown-model", model: "unpriced-model" }),
     usage({ id: "reported", tool: "claude_code", model: "claude-opus-5-5", reported_cost_usd: 0.42 }),
     usage({
       id: "haiku",
@@ -122,7 +126,7 @@ Deno.test("usage_daily sums known costs and counts unpriced requests", async () 
   await ingest(db, [], [
     usage({ id: "a" }),
     usage({ id: "b" }),
-    usage({ id: "c", model: "codex-auto-review" }),
+    usage({ id: "c", model: "unpriced-model" }),
     usage({ id: "late", occurred_at: "2026-10-02T03:00:00Z" }),
   ]);
   const r = await db.query<Record<string, string>>(
@@ -131,8 +135,26 @@ Deno.test("usage_daily sums known costs and counts unpriced requests", async () 
   );
   // 03:00 UTC on Oct 2 is Oct 1 in New York, so all rows land on Oct 1.
   assertEquals(r.rows.map((x) => [x.day, x.model, x.requests, Number(x.cost_usd), x.unpriced_requests]), [
-    ["2026-10-01", "codex-auto-review", 1, 0, 1],
     ["2026-10-01", "gpt-6.1-sol", 3, 0.0096, 0],
+    ["2026-10-01", "unpriced-model", 1, 0, 1],
+  ]);
+});
+
+Deno.test("usage_hourly buckets by local day and hour", async () => {
+  const db = await setup();
+  await ingest(db, [], [
+    usage({ id: "a" }),
+    usage({ id: "b", occurred_at: "2026-10-01T12:59:59Z", model: "unpriced-model" }),
+    usage({ id: "late", occurred_at: "2026-10-02T03:00:00Z" }),
+  ]);
+  const r = await db.query<Record<string, string>>(
+    `select day::text, hour, requests::int, tokens::int, cost_usd::text
+     from public.usage_hourly('2026-10-01', '2026-10-03', 'America/New_York') order by day, hour`,
+  );
+  // 12:00 UTC is 08:00 in New York; 03:00 UTC on Oct 2 is 23:00 on Oct 1.
+  assertEquals(r.rows.map((x) => [x.day, x.hour, x.requests, x.tokens, Number(x.cost_usd)]), [
+    ["2026-10-01", 8, 2, 6200, 0.0032],
+    ["2026-10-01", 23, 1, 3100, 0.0032],
   ]);
 });
 
@@ -163,6 +185,7 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
   try {
     await assertRejects(() => db.query("select * from public.usage_events"));
     await assertRejects(() => db.query("select * from public.usage_daily(now() - interval '1 day', now())"));
+    await assertRejects(() => db.query("select * from public.usage_hourly(now() - interval '1 day', now())"));
   } finally {
     await db.exec("reset role;");
   }
@@ -181,5 +204,5 @@ Deno.test("pricing file loads and has a base row for every model", async () => {
      ))::int as missing, count(*)::int as rows from public.model_pricing p`,
   );
   assertEquals(r.rows[0].missing, 0);
-  assertEquals(r.rows[0].rows, 22);
+  assertEquals(r.rows[0].rows, 23);
 });

@@ -1,19 +1,24 @@
 // codetel dashboard: signs in with an email link, loads daily usage through
-// the usage_daily RPC (RLS-protected), and renders tiles, charts, and a table.
+// the usage_daily and usage_hourly RPCs (RLS-protected), and renders tiles, a
+// chart, a calendar heatmap, an hour-by-weekday heatmap, and a table.
 
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
 const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex" };
+// Claude Code is orange, Codex green.
+const TOOL_SLOTS = { claude_code: 1, codex: 2 };
 const SERIES_SLOTS = 7; // categorical slots; the rest fold into "Other"
 const PAGE = 1000;
 
 const state = {
   rows: [], // all-time daily rows from usage_daily
+  hourly: [], // all-time (day, hour) rows from usage_hourly
   days: 30,
   group: "tool",
+  metric: "cost", // "cost" or "tokens"
   modelSlots: new Map(), // model -> slot index, fixed by all-time cost
-  charts: {},
+  chart: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +28,7 @@ function loadPrefs() {
     const p = JSON.parse(localStorage.getItem("codetel-prefs") ?? "{}");
     if (Number.isInteger(p.days)) state.days = p.days;
     if (p.group === "tool" || p.group === "model") state.group = p.group;
+    if (p.metric === "cost" || p.metric === "tokens") state.metric = p.metric;
     if (p.theme === "light" || p.theme === "dark") document.documentElement.dataset.theme = p.theme;
   } catch { /* storage unavailable */ }
 }
@@ -32,6 +38,7 @@ function savePrefs() {
     localStorage.setItem("codetel-prefs", JSON.stringify({
       days: state.days,
       group: state.group,
+      metric: state.metric,
       theme: document.documentElement.dataset.theme,
     }));
   } catch { /* storage unavailable */ }
@@ -61,19 +68,24 @@ function cssVar(name) {
 
 // ---------- data ----------
 
-async function fetchRows() {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+async function fetchAll(fn) {
   const to = new Date(Date.now() + 864e5).toISOString();
   const rows = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
-      .rpc("usage_daily", { p_from: "2000-01-01T00:00:00Z", p_to: to, p_tz: tz })
+      .rpc(fn, { p_from: "2000-01-01T00:00:00Z", p_to: to, p_tz: TZ })
       .range(from, from + PAGE - 1);
     if (error) throw error;
     rows.push(...data);
     if (data.length < PAGE) break;
   }
-  return rows.map((r) => ({
+  return rows;
+}
+
+async function fetchRows() {
+  return (await fetchAll("usage_daily")).map((r) => ({
     day: r.day,
     tool: r.tool,
     model: r.model,
@@ -84,6 +96,16 @@ async function fetchRows() {
     output: Number(r.output_tokens),
     cost: Number(r.cost_usd),
     unpriced: Number(r.unpriced_requests),
+  }));
+}
+
+async function fetchHourly() {
+  return (await fetchAll("usage_hourly")).map((r) => ({
+    day: r.day,
+    hour: Number(r.hour),
+    requests: Number(r.requests),
+    tokens: Number(r.tokens),
+    cost: Number(r.cost_usd),
   }));
 }
 
@@ -103,7 +125,7 @@ function assignModelSlots(rows) {
 
 function seriesOf(row) {
   if (state.group === "tool") {
-    return { key: row.tool, label: TOOL_NAMES[row.tool] ?? row.tool, slot: row.tool === "codex" ? 1 : 0 };
+    return { key: row.tool, label: TOOL_NAMES[row.tool] ?? row.tool, slot: TOOL_SLOTS[row.tool] ?? null };
   }
   const slot = state.modelSlots.get(row.model);
   return slot == null
@@ -139,12 +161,19 @@ function render() {
 
   for (const b of $("range").querySelectorAll("button")) b.setAttribute("aria-pressed", String(Number(b.dataset.days) === state.days));
   for (const b of $("group").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.group === state.group));
+  for (const b of $("metric").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.metric === state.metric));
 
   renderTiles(inRange);
   renderUnpriced(inRange);
   const series = buildSeries(inRange, days);
-  renderChart("cost", "cost-chart", days, series, (s) => s.cost, usd);
-  renderChart("tokens", "token-chart", days, series, (s) => s.tokens, (v) => compact.format(v));
+  const tokens = state.metric === "tokens";
+  const title = tokens ? "Tokens per day" : "Estimated cost per day";
+  $("chart-title").textContent = title;
+  $("usage-chart").setAttribute("aria-label", title);
+  $("chart-note").hidden = !tokens;
+  renderChart("usage-chart", days, series, tokens ? (s) => s.tokens : (s) => s.cost, tokens ? (v) => compact.format(v) : usd);
+  renderCalendar();
+  renderHeatmap(days);
   renderTable(inRange);
   $("status").textContent = state.rows.length === 0
     ? "No usage recorded yet, or this account is not allowed to read it."
@@ -202,7 +231,7 @@ function buildSeries(rows, days) {
   return [...series.values()].sort((a, b) => (a.slot ?? 99) - (b.slot ?? 99));
 }
 
-function renderChart(name, canvasId, days, series, pick, fmt) {
+function renderChart(canvasId, days, series, pick, fmt) {
   const surface = cssVar("--surface");
   const ink = cssVar("--text-secondary");
   const grid = cssVar("--grid");
@@ -252,8 +281,209 @@ function renderChart(name, canvasId, days, series, pick, fmt) {
       },
     },
   };
-  state.charts[name]?.destroy();
-  state.charts[name] = new Chart($(canvasId), config);
+  state.chart?.destroy();
+  state.chart = new Chart($(canvasId), config);
+}
+
+// ---------- heatmap ----------
+
+const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0]; // Monday first, as Date.getDay() numbers
+const weekdayName = (dow, style) =>
+  new Date(2024, 0, 7 + dow).toLocaleDateString(undefined, { weekday: style }); // 2024-01-07 is a Sunday
+const hour12 = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hourCycle?.startsWith("h1");
+
+function hourLabel(h) {
+  if (!hour12) return String(h);
+  return `${h % 12 || 12}${h < 12 ? "a" : "p"}`;
+}
+
+function hourSpan(h) {
+  const fmt = (x) => new Date(2024, 0, 1, x).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${fmt(h)}–${fmt((h + 1) % 24)}`;
+}
+
+// Four shades by quartile of the nonzero values, as on GitHub.
+function levelOf(values) {
+  const nz = values.filter((v) => v > 0).sort((a, b) => a - b);
+  const q = (p) => nz[Math.min(nz.length - 1, Math.floor(p * nz.length))];
+  const t = nz.length ? [q(0.25), q(0.5), q(0.75)] : [];
+  return (v) => (v <= 0 ? 0 : v <= t[0] ? 1 : v <= t[1] ? 2 : v <= t[2] ? 3 : 4);
+}
+
+function metricPick() {
+  return state.metric === "tokens" ? (c) => c.tokens : (c) => c.cost;
+}
+
+function metricName() {
+  return state.metric === "tokens" ? "Tokens" : "Estimated cost";
+}
+
+function metricFmt() {
+  return state.metric === "tokens" ? (v) => compact.format(v) : usd;
+}
+
+function cellTip(head, c, note) {
+  return { head, lines: [`Cost: ${usd(c.cost)}`, `Tokens: ${compact.format(c.tokens)}`, `Requests: ${whole.format(c.requests)}`], note };
+}
+
+// GitHub-style calendar of the last year, one square per local day; ignores
+// the range filter.
+function renderCalendar() {
+  const pick = metricPick();
+  const byDay = new Map();
+  for (const r of state.rows) {
+    const c = byDay.get(r.day) ?? { requests: 0, tokens: 0, cost: 0 };
+    c.requests += r.requests;
+    c.tokens += r.input + r.cached + r.cacheWrite + r.output;
+    c.cost += r.cost;
+    byDay.set(r.day, c);
+  }
+  const today = new Date();
+  const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1);
+  const start = new Date(yearAgo.getFullYear(), yearAgo.getMonth(), yearAgo.getDate() - ((yearAgo.getDay() + 6) % 7));
+  const days = [];
+  for (let d = start; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) days.push(d);
+  const empty = { requests: 0, tokens: 0, cost: 0 };
+  const level = levelOf(days.map((d) => pick(byDay.get(localDay(d)) ?? empty)));
+
+  const grid = $("calendar");
+  grid.replaceChildren();
+  // Square cells sized to fill the card, with a floor; narrow screens scroll.
+  const weeks = Math.ceil(days.length / 7);
+  const size = Math.max(10, Math.min(18, Math.floor(($("cal-wrap").clientWidth - 36) / weeks) - 3));
+  grid.style.gridTemplateColumns = `32px repeat(${weeks}, ${size}px)`;
+  grid.style.gridTemplateRows = `auto repeat(7, ${size}px)`;
+  const place = (el, row, col) => {
+    el.style.gridRow = String(row);
+    el.style.gridColumn = String(col);
+    grid.append(el);
+  };
+  // Weekday labels (Mon, Wed, Fri) in a column that stays put while it scrolls.
+  for (let i = -1; i < 7; i++) {
+    const el = document.createElement("div");
+    el.className = "cal-day";
+    el.textContent = [0, 2, 4].includes(i) ? weekdayName(i + 1, "short") : "";
+    place(el, i + 2, 1);
+  }
+  state.calCells = new Map();
+  let total = 0, active = 0;
+  days.forEach((d, i) => {
+    const week = Math.floor(i / 7);
+    const key = localDay(d);
+    if (d.getDate() <= 7 && i % 7 === 0) {
+      const m = document.createElement("div");
+      m.className = "cal-month";
+      m.textContent = d.toLocaleDateString(undefined, { month: "short" });
+      place(m, 1, week + 2);
+    }
+    const c = byDay.get(key) ?? empty;
+    const v = pick(c);
+    if (d >= yearAgo) {
+      total += v;
+      if (v > 0) active++;
+    }
+    const el = document.createElement("div");
+    el.className = `cal-cell lvl-${level(v)}`;
+    el.dataset.day = key;
+    state.calCells.set(key, c);
+    place(el, (i % 7) + 2, week + 2);
+  });
+  grid.setAttribute("aria-label", `${metricName()} per day over the last year`);
+  $("cal-sub").textContent = `${metricName()} per day over the last year.`;
+  $("cal-summary").textContent = `${metricFmt()(total)} in the last year, ${active} active days.`;
+  const wrap = $("cal-wrap");
+  wrap.scrollLeft = wrap.scrollWidth;
+}
+
+function renderHeatmap(days) {
+  const pick = metricPick();
+  // cells[dow][hour], summed over every matching day in range
+  const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ requests: 0, tokens: 0, cost: 0 })));
+  const first = days[0], last = days[days.length - 1];
+  for (const r of state.hourly) {
+    if (r.day < first || r.day > last) continue;
+    const c = cells[new Date(r.day + "T00:00:00").getDay()][r.hour];
+    c.requests += r.requests;
+    c.tokens += r.tokens;
+    c.cost += r.cost;
+  }
+  const max = Math.max(0, ...cells.flat().map(pick));
+  const level = levelOf(cells.flat().map(pick));
+
+  const grid = $("heatmap");
+  grid.replaceChildren();
+  grid.append(document.createElement("div"));
+  for (let h = 0; h < 24; h++) {
+    const el = document.createElement("div");
+    el.className = "heat-hour";
+    el.textContent = h % 3 === 0 ? hourLabel(h) : "";
+    grid.append(el);
+  }
+  for (const dow of WEEKDAYS) {
+    const label = document.createElement("div");
+    label.className = "heat-day";
+    label.textContent = weekdayName(dow, "short");
+    grid.append(label);
+    for (let h = 0; h < 24; h++) {
+      const c = cells[dow][h];
+      const el = document.createElement("div");
+      el.className = `heat-cell lvl-${level(pick(c))}`;
+      el.dataset.dow = dow;
+      el.dataset.hour = h;
+      grid.append(el);
+    }
+  }
+  grid.setAttribute("aria-label", `${metricName()} by weekday and hour of day`);
+  state.heatCells = cells;
+
+  $("heat-sub").textContent = `${metricName()} by weekday and hour, ${rangeLabel()}, ${TZ} time.`;
+
+  const byHour = Array.from({ length: 24 }, (_, h) => cells.reduce((s, row) => s + pick(row[h]), 0));
+  const byDay = cells.map((row) => row.reduce((s, c) => s + pick(c), 0));
+  const argmax = (a) => a.reduce((best, v, i) => (v > a[best] ? i : best), 0);
+  $("heat-busiest").textContent = max > 0
+    ? `Busiest hour: ${hourSpan(argmax(byHour))}. Busiest day: ${weekdayName(argmax(byDay), "long")}.`
+    : "No usage in this range.";
+}
+
+function tipFor(target) {
+  const hour = target.closest(".heat-cell");
+  if (hour) {
+    const dow = Number(hour.dataset.dow), h = Number(hour.dataset.hour);
+    return cellTip(`${weekdayName(dow, "long")} ${hourSpan(h)}`, state.heatCells[dow][h], `total, ${rangeLabel()}`);
+  }
+  const day = target.closest(".cal-cell");
+  if (day) {
+    const label = new Date(day.dataset.day + "T00:00:00")
+      .toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+    return cellTip(label, state.calCells.get(day.dataset.day), "");
+  }
+  return null;
+}
+
+function showTip(e) {
+  const tip = $("heat-tip");
+  const t = tipFor(e.target);
+  if (!t) {
+    tip.hidden = true;
+    return;
+  }
+  const div = (text, cls) => {
+    const d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = text;
+    return d;
+  };
+  tip.replaceChildren(div(t.head, "tip-head"), ...t.lines.map((l) => div(l)));
+  if (t.note) tip.append(div(t.note, "tip-dim"));
+  tip.hidden = false;
+  const pad = 12;
+  const { width, height } = tip.getBoundingClientRect();
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + width > innerWidth - 4) x = e.clientX - width - pad;
+  if (y + height > innerHeight - 4) y = e.clientY - height - pad;
+  tip.style.left = `${Math.max(4, x)}px`;
+  tip.style.top = `${Math.max(4, y)}px`;
 }
 
 function renderTable(rows) {
@@ -318,7 +548,7 @@ function renderTable(rows) {
 async function load() {
   $("status").textContent = "Loading…";
   try {
-    state.rows = await fetchRows();
+    [state.rows, state.hourly] = await Promise.all([fetchRows(), fetchHourly()]);
     assignModelSlots(state.rows);
     render();
   } catch (e) {
@@ -368,6 +598,25 @@ $("group").addEventListener("click", (e) => {
   state.group = b.dataset.group;
   savePrefs();
   render();
+});
+
+$("metric").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.metric = b.dataset.metric;
+  savePrefs();
+  render();
+});
+
+for (const id of ["heatmap", "calendar"]) {
+  $(id).addEventListener("pointermove", showTip);
+  $(id).addEventListener("pointerleave", () => { $("heat-tip").hidden = true; });
+}
+
+let resizeTimer;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (!$("dashboard").hidden && state.rows.length) renderCalendar(); }, 150);
 });
 
 $("refresh").addEventListener("click", load);

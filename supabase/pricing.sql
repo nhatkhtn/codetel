@@ -3,8 +3,8 @@
 --   https://platform.claude.com/docs/en/about-claude/pricing
 --   https://developers.openai.com/api/docs/pricing
 --
--- effective_from 2000-01-01 applies these rates to all history, including
--- backfilled usage; add a row with a later effective_from when a price changes.
+-- Current prices apply to all history, including backfilled usage
+-- (effective_from 2000-01-01). Past price changes are not tracked.
 --
 -- Size tiers (min_prompt_tokens = all input tokens, cached or not):
 --   Claude Haiku 5.5: prompts over 100,000 tokens.
@@ -16,7 +16,7 @@
 -- Claude Code usage exported over OTel carries its own reported cost; these
 -- Claude rows price backfilled transcripts only.
 --
--- Not priced (no published API price): codex-auto-review.
+-- codex-auto-review is free now (it used to be billed at gpt-5.6-luna rates).
 
 insert into public.model_pricing
   (model, effective_from, min_prompt_tokens, input_rate, cached_input_rate, cache_write_short_rate, cache_write_long_rate, output_rate)
@@ -43,7 +43,8 @@ values
   ('gpt-5.6-terra',     '2000-01-01', 0,      2.00,  0.20,  2.50,   5.00,  12.00),
   ('gpt-5.6-terra',     '2000-01-01', 272001, 4.00,  0.40,  5.00,  10.00,  18.00),
   ('gpt-5.6-luna',      '2000-01-01', 0,      0.20,  0.02,  0.25,   0.50,   1.20),
-  ('gpt-5.6-luna',      '2000-01-01', 272001, 0.40,  0.04,  0.50,   1.00,   1.80)
+  ('gpt-5.6-luna',      '2000-01-01', 272001, 0.40,  0.04,  0.50,   1.00,   1.80),
+  ('codex-auto-review', '2000-01-01', 0,      0.00,  0.00,  0.00,   0.00,   0.00)
 on conflict (model, effective_from, min_prompt_tokens) do update set
   input_rate = excluded.input_rate,
   cached_input_rate = excluded.cached_input_rate,

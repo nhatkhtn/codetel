@@ -55,6 +55,10 @@
           <button data-group="tool">By tool</button>
           <button data-group="model">By model</button>
         </div>
+        <div class="segmented" role="group" aria-label="Metric" id="metric">
+          <button data-metric="cost">Cost</button>
+          <button data-metric="tokens">Tokens</button>
+        </div>
         <button id="refresh" class="ghost">Refresh</button>
       </div>
 
@@ -70,15 +74,32 @@
       <div id="unpriced" class="notice" hidden></div>
 
       <section class="card">
-        <h2>Estimated cost per day</h2>
-        <div class="chart"><canvas id="cost-chart" aria-label="Estimated cost per day" role="img"></canvas></div>
+        <h2 id="chart-title">Estimated cost per day</h2>
+        <div class="chart"><canvas id="usage-chart" aria-label="Estimated cost per day" role="img"></canvas></div>
+        <p id="chart-note" class="muted small" hidden>Uncached input, cached input, cache writes, and output combined.</p>
       </section>
 
       <section class="card">
-        <h2>Tokens per day</h2>
-        <p class="muted small">Uncached input, cached input, cache writes, and output combined.</p>
-        <div class="chart"><canvas id="token-chart" aria-label="Tokens per day" role="img"></canvas></div>
+        <h2>Daily activity</h2>
+        <p class="muted small heat-sub" id="cal-sub"></p>
+        <div class="cal-wrap" id="cal-wrap"><div class="calendar" id="calendar" role="img"></div></div>
+        <div class="heat-foot">
+          <p id="cal-summary" class="muted small"></p>
+          <div class="heat-scale muted small" aria-hidden="true">Less <i class="lvl-0"></i><i class="lvl-1"></i><i class="lvl-2"></i><i class="lvl-3"></i><i class="lvl-4"></i> More</div>
+        </div>
       </section>
+
+      <section class="card">
+        <h2>Time of day</h2>
+        <p class="muted small heat-sub" id="heat-sub"></p>
+        <div class="heatmap" id="heatmap" role="img"></div>
+        <div class="heat-foot">
+          <p id="heat-busiest" class="muted small"></p>
+          <div class="heat-scale muted small" aria-hidden="true">Less <i class="lvl-0"></i><i class="lvl-1"></i><i class="lvl-2"></i><i class="lvl-3"></i><i class="lvl-4"></i> More</div>
+        </div>
+      </section>
+
+      <div id="heat-tip" class="tip" hidden></div>
 
       <section class="card">
         <h2>By model</h2>
