@@ -17,6 +17,7 @@ const state = {
   days: 30,
   group: "tool",
   metric: "cost", // "cost" or "tokens"
+  breakdown: null, // open tile breakdown: "cost", "requests", "input", "output"
   modelSlots: new Map(), // model -> slot index, fixed by all-time cost
   charts: {},
 };
@@ -164,6 +165,7 @@ function render() {
   for (const b of $("metric").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.metric === state.metric));
 
   renderTiles(inRange);
+  renderBreakdown(inRange);
   renderUnpriced(inRange);
   const series = buildSeries(inRange, days);
   const tokens = state.metric === "tokens";
@@ -184,20 +186,120 @@ function renderTiles(rows) {
   const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
   const cost = sum((r) => r.cost);
   const requests = sum((r) => r.requests);
-  const unpriced = sum((r) => r.unpriced);
   const uncached = sum((r) => r.input);
   const cached = sum((r) => r.cached);
   const cacheWrite = sum((r) => r.cacheWrite);
   const input = uncached + cached + cacheWrite;
   const output = sum((r) => r.output);
   $("kpi-cost").textContent = usd(cost);
-  $("kpi-cost-note").textContent = unpriced ? `excludes ${whole.format(unpriced)} unpriced requests` : "all requests priced";
   $("kpi-requests").textContent = whole.format(requests);
-  $("kpi-requests-note").textContent = rangeLabel();
   $("kpi-input").textContent = compact.format(input);
   $("kpi-input-note").textContent = input ? `${Math.round((cached / input) * 100)}% cache reads` : "";
   $("kpi-output").textContent = compact.format(output);
-  $("kpi-output-note").textContent = "";
+}
+
+// Pie of what makes up the open tile's total. Cost, requests and output split
+// by tool or model (the "Group by" switch); input splits by token type.
+const BREAKDOWNS = {
+  cost: { title: "Estimated cost", fmt: (v) => usd(v), pick: (r) => r.cost },
+  requests: { title: "Requests", fmt: (v) => whole.format(v), pick: (r) => r.requests },
+  output: { title: "Output tokens", fmt: (v) => compact.format(v), pick: (r) => r.output },
+  input: { title: "Input tokens", fmt: (v) => compact.format(v), byType: true },
+};
+const INPUT_TYPES = [
+  { key: "cached", label: "Cache reads", slot: 0 },
+  { key: "input", label: "Uncached input", slot: 3 },
+  { key: "cacheWrite", label: "Cache writes", slot: 6 },
+];
+
+function breakdownSlices(rows, b) {
+  if (b.byType) {
+    return INPUT_TYPES.map((t) => ({ label: t.label, slot: t.slot, value: rows.reduce((s, r) => s + r[t.key], 0) }));
+  }
+  const slices = new Map();
+  for (const r of rows) {
+    const s = seriesOf(r);
+    const e = slices.get(s.key) ?? { label: s.label, slot: s.slot, value: 0 };
+    e.value += b.pick(r);
+    slices.set(s.key, e);
+  }
+  return [...slices.values()];
+}
+
+function renderBreakdown(rows) {
+  for (const t of document.querySelectorAll(".tile[data-kpi]")) {
+    t.setAttribute("aria-expanded", String(t.dataset.kpi === state.breakdown));
+  }
+  const panel = $("breakdown");
+  panel.hidden = !state.breakdown;
+  if (!state.breakdown) {
+    state.charts.breakdown?.destroy();
+    delete state.charts.breakdown;
+    return;
+  }
+  const b = BREAKDOWNS[state.breakdown];
+  // Largest first; "Other models" stays last.
+  const slices = breakdownSlices(rows, b)
+    .filter((x) => x.value > 0)
+    .sort((x, y) => (x.slot == null) - (y.slot == null) || y.value - x.value);
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  const by = b.byType ? "by token type" : state.group === "tool" ? "by tool" : "by model";
+  $("bd-title").textContent = `${b.title} ${by}, ${rangeLabel()}`;
+  const pct = (v) => (total ? `${((v / total) * 100).toFixed(v / total < 0.1 ? 1 : 0)}%` : "");
+
+  const body = $("bd-rows");
+  body.replaceChildren();
+  for (const x of slices) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = seriesColor(x.slot);
+    name.append(sw, x.label);
+    const val = document.createElement("td");
+    val.className = "num";
+    val.textContent = b.fmt(x.value);
+    const p = document.createElement("td");
+    p.className = "num pct";
+    p.textContent = pct(x.value);
+    tr.append(name, val, p);
+    body.append(tr);
+  }
+  if (!slices.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.className = "muted";
+    td.textContent = "Nothing in this range.";
+    tr.append(td);
+    body.append(tr);
+  }
+
+  const config = {
+    type: "doughnut",
+    data: {
+      labels: slices.map((x) => x.label),
+      datasets: [{
+        data: slices.map((x) => x.value),
+        backgroundColor: slices.map((x) => seriesColor(x.slot)),
+        hoverBackgroundColor: slices.map((x) => seriesColor(x.slot)),
+        borderColor: cssVar("--surface"),
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      cutout: "55%",
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (item) => ` ${b.fmt(item.raw)} (${pct(item.raw)})` } },
+      },
+    },
+  };
+  $("bd-chart").setAttribute("aria-label", $("bd-title").textContent);
+  state.charts.breakdown?.destroy();
+  state.charts.breakdown = new Chart($("bd-chart"), config);
 }
 
 function rangeLabel() {
@@ -643,6 +745,21 @@ addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { if (!$("dashboard").hidden && state.rows.length) renderCalendar(); }, 150);
 });
+
+function toggleBreakdown(tile) {
+  state.breakdown = state.breakdown === tile.dataset.kpi ? null : tile.dataset.kpi;
+  render();
+}
+
+for (const tile of document.querySelectorAll(".tile[data-kpi]")) {
+  tile.addEventListener("click", () => toggleBreakdown(tile));
+  tile.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggleBreakdown(tile);
+    }
+  });
+}
 
 $("refresh").addEventListener("click", load);
 

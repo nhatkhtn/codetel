@@ -75,11 +75,19 @@
       <p id="status" class="muted" role="status"></p>
 
       <div class="tiles">
-        <div class="tile"><div class="tile-label">Estimated cost</div><div class="tile-value" id="kpi-cost">–</div><div class="tile-note" id="kpi-cost-note"></div></div>
-        <div class="tile"><div class="tile-label">Requests</div><div class="tile-value" id="kpi-requests">–</div><div class="tile-note" id="kpi-requests-note"></div></div>
-        <div class="tile"><div class="tile-label">Input tokens</div><div class="tile-value" id="kpi-input">–</div><div class="tile-note" id="kpi-input-note"></div></div>
-        <div class="tile"><div class="tile-label">Output tokens</div><div class="tile-value" id="kpi-output">–</div><div class="tile-note" id="kpi-output-note"></div></div>
+        <div class="tile" data-kpi="cost" role="button" tabindex="0" aria-expanded="false" aria-controls="breakdown"><div class="tile-label">Estimated cost</div><div class="tile-value" id="kpi-cost">–</div></div>
+        <div class="tile" data-kpi="requests" role="button" tabindex="0" aria-expanded="false" aria-controls="breakdown"><div class="tile-label">Requests</div><div class="tile-value" id="kpi-requests">–</div></div>
+        <div class="tile" data-kpi="input" role="button" tabindex="0" aria-expanded="false" aria-controls="breakdown"><div class="tile-label">Input tokens</div><div class="tile-value" id="kpi-input">–</div><div class="tile-note" id="kpi-input-note"></div></div>
+        <div class="tile" data-kpi="output" role="button" tabindex="0" aria-expanded="false" aria-controls="breakdown"><div class="tile-label">Output tokens</div><div class="tile-value" id="kpi-output">–</div></div>
       </div>
+
+      <section class="card breakdown" id="breakdown" hidden>
+        <h2 id="bd-title"></h2>
+        <div class="bd-body">
+          <div class="bd-pie"><canvas id="bd-chart" role="img"></canvas></div>
+          <table class="bd-table"><tbody id="bd-rows"></tbody></table>
+        </div>
+      </section>
 
       <div id="unpriced" class="notice" hidden></div>
 
