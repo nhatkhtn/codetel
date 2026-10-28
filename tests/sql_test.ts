@@ -204,5 +204,5 @@ Deno.test("pricing file loads and has a base row for every model", async () => {
      ))::int as missing, count(*)::int as rows from public.model_pricing p`,
   );
   assertEquals(r.rows[0].missing, 0);
-  assertEquals(r.rows[0].rows, 23);
+  assertEquals(r.rows[0].rows, 25);
 });

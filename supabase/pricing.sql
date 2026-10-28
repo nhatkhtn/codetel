@@ -21,6 +21,8 @@
 insert into public.model_pricing
   (model, effective_from, min_prompt_tokens, input_rate, cached_input_rate, cache_write_short_rate, cache_write_long_rate, output_rate)
 values
+  ('claude-fable-5-1',  '2000-01-01', 0,     10.00,  0.25, 12.50,  20.00,  50.00),
+  ('claude-fable-5',    '2000-01-01', 0,     10.00,  1.00, 12.50,  20.00,  50.00),
   ('claude-opus-5-5',   '2000-01-01', 0,      4.00,  0.20,  5.00,   8.00,  20.00),
   ('claude-opus-4-7',   '2000-01-01', 0,      5.00,  0.50,  6.25,  10.00,  25.00),
   ('claude-sonnet-5-5', '2000-01-01', 0,      2.00,  0.10,  2.50,   4.00,  10.00),
