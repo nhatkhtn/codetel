@@ -19,12 +19,13 @@ enabled is imported once per machine by `backfill/backfill.mjs`.
 
 | Path | What |
 | --- | --- |
-| `supabase/migrations/` | Schema, cost view, `usage_daily()` and `usage_hourly()` RPCs, `private.ingest()`, RLS |
+| `supabase/migrations/` | Schema, cost view, `usage_daily()` and `usage_hourly()` RPCs, `private.ingest()`, RLS, raw-record cleanup job |
 | `supabase/functions/ingest/` | Edge Function: auth, routing, gzip, DB write |
 | `supabase/functions/_shared/telemetry.ts` | OTLP parsing and usage normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |
 | `backfill/backfill.mjs` | One-off import from local transcripts (Node, no dependencies) |
 | `docs/` | Dashboard (plain HTML/JS), served by GitHub Pages |
+| `.github/workflows/pages.yml` | Deploys `docs/` to Pages, stamping asset versions |
 | `tests/` | Deno tests; scrubbed OTLP fixtures; fixture scrubber |
 
 ## Data
@@ -48,8 +49,11 @@ model happens in the dashboard.
 
 **`telemetry_records`**: raw OTel records as exported (`{resource, scope,
 record|span}`), so parsers can be fixed and data re-derived. All log records
-are kept except Codex `codex.tool_result` (tool arguments and output). Of
-Codex's ~1000 spans per turn, only `session_task.turn` (turn totals) is kept.
+are kept except tool events (`tool_decision`, `tool_result` and their
+`codex.` versions), which carry no usage. Of Codex's ~1000 spans per turn,
+only `session_task.turn` (turn totals) is kept. Raw records are deleted 30
+days after they arrive by a nightly `pg_cron` job
+(`private.prune_telemetry_records()`, 04:17 UTC); usage rows are kept.
 
 **`model_pricing`** and the **`usage_with_cost`** view: cost is computed at
 query time. Reported cost wins; otherwise the rate set in effect at the
@@ -140,7 +144,13 @@ npx supabase@2.122.0 secrets set --project-ref cmbnmbrudyozwsdmecrt --env-file <
 
 Migrations and `supabase/pricing.sql` are applied through the Management API
 (`/v1/projects/{ref}/database/migrations` and `/database/query`); no database
-password is needed.
+password is needed. The API records its own version timestamp for each
+migration; rename the local file to match.
+
+The dashboard deploys on every push that touches `docs/`
+(`.github/workflows/pages.yml`). Asset links in `docs/index.html` carry
+`?v=dev`; the workflow replaces it with the commit, so a cached page never
+mixes old and new files.
 
 Dashboard access: sign-ups are disabled. A user is created through the Auth
 admin API and added to `public.dashboard_users`.
@@ -152,5 +162,3 @@ admin API and added to `public.dashboard_users`.
   observed yet.
 - Claude fast mode, US-only inference (1.1x) and Batch discounts are not
   modeled for backfilled Claude rows (OTel rows carry the actual cost).
-- Raw record retention is unlimited for now; watch storage
-  (about 40 KB per Codex turn).
