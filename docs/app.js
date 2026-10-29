@@ -212,7 +212,7 @@ function render() {
   $("chart-info").hidden = !tokens;
   renderChart("usage-chart", days, series, tokens ? (s) => s.tokens : (s) => s.cost, tokens ? (v) => compact.format(v) : usd);
   renderCalendar();
-  renderPromptPatterns();
+  renderPromptPatterns(days);
   renderPatterns(days);
   renderTable(inRange);
   renderLatest();
@@ -578,7 +578,8 @@ function renderCalendar() {
     c[r.tool] = (c[r.tool] ?? 0) + r.prompts;
     byDay.set(r.day, c);
   }
-  const { today, yearAgo } = calendarWindow();
+  const today = new Date();
+  const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1);
   const start = new Date(yearAgo.getFullYear(), yearAgo.getMonth(), yearAgo.getDate() - ((yearAgo.getDay() + 6) % 7));
   const days = [];
   for (let d = start; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) days.push(d);
@@ -634,26 +635,15 @@ function renderCalendar() {
   wrap.scrollLeft = wrap.scrollWidth;
 }
 
-// The calendar's 12 months: from a year ago tomorrow through today, local time.
-function calendarWindow() {
-  const today = new Date();
-  return { today, yearAgo: new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1) };
-}
-
-// Your prompts per day on average by weekday and by hour over the calendar's
-// 12 months, shown under the calendar when its heading is pressed.
-function renderPromptPatterns() {
+// Your prompts per day on average by weekday and by hour over the range picked
+// below the calendar, shown under it when its heading is pressed.
+function renderPromptPatterns(days) {
   $("cal-toggle").setAttribute("aria-expanded", String(state.calOpen));
   $("cal-patterns").hidden = !state.calOpen;
   if (!state.calOpen) return;
-  const { today, yearAgo } = calendarWindow();
-  const first = localDay(yearAgo), last = localDay(today);
+  const first = days[0], last = days[days.length - 1];
   const dowCount = Array(7).fill(0);
-  let nDays = 0;
-  for (let d = yearAgo; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
-    dowCount[d.getDay()]++;
-    nDays++;
-  }
+  for (const d of days) dowCount[new Date(d + "T00:00:00").getDay()]++;
   const byDow = Array(7).fill(0), byHour = Array(24).fill(0);
   for (const r of state.prompts) {
     if (r.day < first || r.day > last) continue;
@@ -661,10 +651,11 @@ function renderPromptPatterns() {
     byHour[r.hour] += r.prompts;
   }
   const dowAvg = WEEKDAYS.map((dow) => byDow[dow] / Math.max(1, dowCount[dow]));
-  const hourAvg = byHour.map((n) => n / nDays);
+  const hourAvg = byHour.map((n) => n / days.length);
   const any = dowAvg.some((v) => v > 0);
   const tip = (v) => [` ${oneDecimal.format(v)} prompts per day`];
-  $("cal-hour-sub").textContent = `Prompts per day on average, last 12 months, ${TZ} time.`;
+  $("cal-dow-sub").textContent = `Prompts per day on average, ${rangeLabel()}.`;
+  $("cal-hour-sub").textContent = `Prompts per day on average, ${rangeLabel()}, ${TZ} time.`;
   renderBars("cal-dow", "cal-dow-chart", {
     labels: WEEKDAYS.map((d) => weekdayName(d, "short")), values: dowAvg, peak: any ? argmax(dowAvg) : -1,
     fmt: compact.format, label: "Prompts", aria: "Your prompts per day on average, by weekday",
@@ -995,7 +986,7 @@ for (const tile of document.querySelectorAll(".tile[data-kpi]")) {
 
 $("cal-toggle").addEventListener("click", () => {
   state.calOpen = !state.calOpen;
-  renderPromptPatterns();
+  renderPromptPatterns(rangeDays());
 });
 
 $("refresh").addEventListener("click", load);
