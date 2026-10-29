@@ -36,7 +36,6 @@ function loadPrefs() {
     if (Number.isInteger(p.days)) state.days = p.days;
     if (p.group === "tool" || p.group === "model") state.group = p.group;
     if (p.metric === "cost" || p.metric === "tokens") state.metric = p.metric;
-    if (p.theme === "light" || p.theme === "dark") document.documentElement.dataset.theme = p.theme;
   } catch { /* storage unavailable */ }
 }
 
@@ -46,7 +45,6 @@ function savePrefs() {
       days: state.days,
       group: state.group,
       metric: state.metric,
-      theme: document.documentElement.dataset.theme,
     }));
   } catch { /* storage unavailable */ }
 }
@@ -927,14 +925,6 @@ for (const tile of document.querySelectorAll(".tile[data-kpi]")) {
 }
 
 $("refresh").addEventListener("click", load);
-
-$("theme").addEventListener("click", () => {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  const current = document.documentElement.dataset.theme ?? (dark ? "dark" : "light");
-  document.documentElement.dataset.theme = current === "dark" ? "light" : "dark";
-  savePrefs();
-  if (state.rows.length || !$("dashboard").hidden) render();
-});
 
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (!$("dashboard").hidden) render();
