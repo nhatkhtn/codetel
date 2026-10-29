@@ -187,3 +187,10 @@ admin API and added to `public.dashboard_users`.
   observed yet.
 - Claude fast mode, US-only inference (1.1x) and Batch discounts are not
   modeled for backfilled Claude rows (OTel rows carry the actual cost).
+
+## References
+
+- Claude Code telemetry (events, attributes, exporter settings):
+  https://code.claude.com/docs/en/monitoring-usage
+- Codex telemetry (events, metrics, exporter settings):
+  https://github.com/openai/codex/blob/main/codex-rs/otel/README.md
