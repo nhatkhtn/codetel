@@ -206,6 +206,7 @@ input {
 .h2-toggle[aria-expanded="true"]::after { content: " ▴"; }
 .h2-toggle:hover { color: var(--accent); }
 .cal-patterns { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--grid); }
+.cal-patterns[hidden] { display: none; }
 .cal-patterns > div { min-width: 0; }
 h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
 .cal-wrap { overflow-x: auto; padding-bottom: 4px; }
