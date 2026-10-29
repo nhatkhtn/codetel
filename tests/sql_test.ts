@@ -198,6 +198,34 @@ Deno.test("prompts are stored once; a re-sent usage row fills a missing query_so
   assertEquals(u.rows[0].query_source, "sdk");
 });
 
+Deno.test("prompt_daily counts only your prompts", async () => {
+  const db = await setup();
+  const prompt = (id: string, over: Record<string, unknown>) => ({
+    id, occurred_at: "2026-10-01T12:00:00Z", tool: "claude_code", session_id: "s1",
+    prompt_length: 10, command_name: null, originator: null, ...over,
+  });
+  await ingestPrompts(db, [
+    prompt("c1", {}),
+    prompt("c2", { command_name: "compact" }),
+    prompt("c3", { session_id: "scripted" }),
+    prompt("x1", { tool: "codex", session_id: "t1", originator: "codex-tui" }),
+    prompt("x2", { tool: "codex", session_id: "t2", originator: "codex_exec" }),
+    prompt("late", { occurred_at: "2026-10-02T03:00:00Z" }),
+  ]);
+  await ingest(db, [], [
+    usage({ id: "u1", tool: "claude_code", session_id: "s1", query_source: "repl_main_thread" }),
+    usage({ id: "u2", tool: "claude_code", session_id: "scripted", query_source: "sdk" }),
+  ]);
+  const r = await db.query<Record<string, string>>(
+    `select day::text, tool, prompts::int from public.prompt_daily('2026-10-01', '2026-10-03', 'America/New_York') order by day, tool`,
+  );
+  // 03:00 UTC on Oct 2 is Oct 1 in New York.
+  assertEquals(r.rows.map((x) => [x.day, x.tool, x.prompts]), [
+    ["2026-10-01", "claude_code", 3],
+    ["2026-10-01", "codex", 1],
+  ]);
+});
+
 Deno.test("usage_hourly buckets by local day and hour", async () => {
   const db = await setup();
   await ingest(db, [], [
@@ -245,7 +273,7 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
       await db.exec("reset role; reset request.jwt.claim.sub;");
     }
   };
-  for (const table of ["public.usage_events", "public.usage_with_cost", "public.telemetry_records", "public.model_pricing", "public.prompt_events"]) {
+  for (const table of ["public.usage_events", "public.usage_with_cost", "public.telemetry_records", "public.model_pricing", "public.prompt_events", "public.human_prompts"]) {
     assert((await countAs("authenticated", OWNER, table)) > 0, `owner reads ${table}`);
     assertEquals(await countAs("authenticated", STRANGER, table), 0, `stranger sees nothing in ${table}`);
   }
@@ -264,6 +292,7 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
     await assertRejects(() => db.query("select * from public.prompt_events"));
     await assertRejects(() => db.query("select * from public.usage_daily(now() - interval '1 day', now())"));
     await assertRejects(() => db.query("select * from public.usage_hourly(now() - interval '1 day', now())"));
+    await assertRejects(() => db.query("select * from public.prompt_daily(now() - interval '1 day', now())"));
   } finally {
     await db.exec("reset role;");
   }

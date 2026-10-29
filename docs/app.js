@@ -1,7 +1,8 @@
 // codetel dashboard: signs in with an email link, loads daily usage through
-// the usage_daily and usage_hourly RPCs and the latest rows of usage_with_cost
-// (all RLS-protected), and renders tiles, a chart, a calendar heatmap, weekday
-// and hour-of-day charts, and tables.
+// the usage_daily and usage_hourly RPCs, daily prompt counts through
+// prompt_daily, and the latest rows of usage_with_cost (all RLS-protected),
+// and renders tiles, a chart, a calendar of your prompts, weekday and
+// hour-of-day charts, and tables.
 
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
@@ -20,6 +21,7 @@ const state = {
   rows: [], // all-time daily rows from usage_daily
   hourly: [], // all-time (day, hour) rows from usage_hourly
   latest: [], // the 10 most recent requests
+  prompts: [], // all-time (day, tool) counts of your prompts from prompt_daily
   days: 30,
   group: "tool",
   metric: "cost", // "cost" or "tokens"
@@ -107,6 +109,10 @@ async function fetchRows() {
     cacheWriteCost: Number(r.cache_write_cost_usd),
     outputCost: Number(r.output_cost_usd),
   }));
+}
+
+async function fetchPrompts() {
+  return (await fetchAll("prompt_daily")).map((r) => ({ day: r.day, tool: r.tool, prompts: Number(r.prompts) }));
 }
 
 async function fetchHourly() {
@@ -544,20 +550,24 @@ function metricFmt() {
   return state.metric === "tokens" ? (v) => compact.format(v) : usd;
 }
 
-function cellTip(head, c, note) {
-  return { head, lines: [`Cost: ${usd(c.cost)}`, `Tokens: ${compact.format(c.tokens)}`, `Requests: ${whole.format(c.requests)}`], note };
+const plural = (n, word) => `${whole.format(n)} ${word}${n === 1 ? "" : "s"}`;
+
+function cellTip(head, c) {
+  const lines = c.total
+    ? Object.entries(TOOL_NAMES).filter(([t]) => c[t]).map(([t, name]) => `${name}: ${whole.format(c[t])}`)
+    : [];
+  return { head, lines: [plural(c.total, "prompt"), ...(lines.length > 1 ? lines : [])], note: "" };
 }
 
-// GitHub-style calendar of the last year, one square per local day; ignores
-// the range filter.
+// GitHub-style calendar of your prompts over the last year, one square per
+// local day; ignores the range filter and the Cost / Tokens switch.
 function renderCalendar() {
-  const pick = metricPick();
+  const pick = (c) => c.total;
   const byDay = new Map();
-  for (const r of state.rows) {
-    const c = byDay.get(r.day) ?? { requests: 0, tokens: 0, cost: 0 };
-    c.requests += r.requests;
-    c.tokens += r.input + r.cached + r.cacheWrite + r.output;
-    c.cost += r.cost;
+  for (const r of state.prompts) {
+    const c = byDay.get(r.day) ?? { total: 0 };
+    c.total += r.prompts;
+    c[r.tool] = (c[r.tool] ?? 0) + r.prompts;
     byDay.set(r.day, c);
   }
   const today = new Date();
@@ -565,7 +575,7 @@ function renderCalendar() {
   const start = new Date(yearAgo.getFullYear(), yearAgo.getMonth(), yearAgo.getDate() - ((yearAgo.getDay() + 6) % 7));
   const days = [];
   for (let d = start; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) days.push(d);
-  const empty = { requests: 0, tokens: 0, cost: 0 };
+  const empty = { total: 0 };
   const level = levelOf(days.map((d) => pick(byDay.get(localDay(d)) ?? empty)));
 
   const grid = $("calendar");
@@ -610,9 +620,9 @@ function renderCalendar() {
     state.calCells.set(key, c);
     place(el, (i % 7) + 2, week + 2);
   });
-  grid.setAttribute("aria-label", `${metricName()} per day over the last 12 months`);
-  $("cal-sub").textContent = `${metricName()} per day.`;
-  $("cal-summary").textContent = `${metricFmt()(total)} in total, ${active} active days.`;
+  grid.setAttribute("aria-label", "Your prompts per day over the last 12 months");
+  $("cal-sub").textContent = "Prompts you sent per day, in Claude Code and Codex. Scripted runs are left out.";
+  $("cal-summary").textContent = `${plural(total, "prompt")} in total, ${plural(active, "active day")}.`;
   const wrap = $("cal-wrap");
   wrap.scrollLeft = wrap.scrollWidth;
 }
@@ -714,7 +724,7 @@ function tipFor(target) {
   if (day) {
     const label = new Date(day.dataset.day + "T00:00:00")
       .toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
-    return cellTip(label, state.calCells.get(day.dataset.day), "");
+    return cellTip(label, state.calCells.get(day.dataset.day));
   }
   return null;
 }
@@ -838,7 +848,9 @@ function renderLatest() {
 async function load() {
   $("status").textContent = "Loading…";
   try {
-    [state.rows, state.hourly, state.latest] = await Promise.all([fetchRows(), fetchHourly(), fetchLatest()]);
+    [state.rows, state.hourly, state.latest, state.prompts] = await Promise.all([
+      fetchRows(), fetchHourly(), fetchLatest(), fetchPrompts(),
+    ]);
     assignModelSeries(state.rows);
     render();
   } catch (e) {
