@@ -94,7 +94,7 @@ body {
   flex-wrap: wrap;
 }
 
-h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
 h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
 .subtitle { margin: 2px 0 0; color: var(--text-secondary); }
 .muted { color: var(--text-secondary); }
