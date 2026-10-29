@@ -1,5 +1,5 @@
-// Turns OTLP/HTTP JSON batches from Claude Code and Codex into raw records
-// and normalized per-request usage rows. Pure functions; no I/O.
+// Turns OTLP/HTTP JSON batches from Claude Code and Codex into raw records,
+// normalized per-request usage rows and prompt rows. Pure functions; no I/O.
 
 export type Tool = "claude_code" | "codex";
 
@@ -26,11 +26,23 @@ export interface UsageEvent {
   output_tokens: number;
   reasoning_output_tokens: number | null;
   reported_cost_usd: number | null;
+  query_source?: string | null;
+}
+
+export interface PromptEvent {
+  id: string;
+  occurred_at: string;
+  tool: Tool;
+  session_id: string;
+  prompt_length: number;
+  command_name: string | null;
+  originator: string | null;
 }
 
 export interface Parsed {
   records: RawRecord[];
   usage: UsageEvent[];
+  prompts: PromptEvent[];
 }
 
 // Log events never stored: per-tool-call events carry no usage (and Codex's
@@ -127,6 +139,44 @@ function claudeUsage(a: Attrs): UsageEvent | null {
     output_tokens: int(a["output_tokens"]),
     reasoning_output_tokens: null,
     reported_cost_usd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+    query_source: str(a["query_source"]),
+  };
+}
+
+// Claude Code's prompt ID is the same one its transcripts record, so the
+// backfill and the live path agree on IDs.
+function claudePrompt(a: Attrs): PromptEvent | null {
+  const id = str(a["prompt.id"]);
+  const session = str(a["session.id"]);
+  const at = str(a["event.timestamp"]);
+  if (!id || !session || !at) return null;
+  return {
+    id,
+    occurred_at: at,
+    tool: "claude_code",
+    session_id: session,
+    prompt_length: int(a["prompt_length"]),
+    command_name: str(a["command_name"]),
+    originator: null,
+  };
+}
+
+// Codex prompt events carry no ID; the row ID hashes the fields that
+// identify the event, as for usage rows.
+async function codexPrompt(a: Attrs): Promise<PromptEvent | null> {
+  const session = str(a["conversation.id"]);
+  const at = str(a["event.timestamp"]);
+  if (!session || !at) return null;
+  const length = int(a["prompt_length"]);
+  const key = JSON.stringify(["codex_prompt", session, at, length]);
+  return {
+    id: "codex:" + (await sha256Hex(key)).slice(0, 32),
+    occurred_at: at,
+    tool: "codex",
+    session_id: session,
+    prompt_length: length,
+    command_name: null,
+    originator: str(a["originator"]),
   };
 }
 
@@ -171,6 +221,7 @@ async function codexUsage(a: Attrs): Promise<UsageEvent | null> {
 export async function parseLogs(body: Json): Promise<Parsed> {
   const records: RawRecord[] = [];
   const usage: UsageEvent[] = [];
+  const prompts: PromptEvent[] = [];
   for (const rl of body?.resourceLogs ?? []) {
     const resource = attrs(rl.resource?.attributes);
     for (const sl of rl.scopeLogs ?? []) {
@@ -192,10 +243,16 @@ export async function parseLogs(body: Json): Promise<Parsed> {
           ? await codexUsage(a)
           : null;
         if (row) usage.push(row);
+        const prompt = tool === "claude_code" && name === "user_prompt"
+          ? claudePrompt(a)
+          : tool === "codex" && name === "codex.user_prompt"
+          ? await codexPrompt(a)
+          : null;
+        if (prompt) prompts.push(prompt);
       }
     }
   }
-  return { records, usage };
+  return { records, usage, prompts };
 }
 
 export function parseTraces(body: Json): Parsed {
@@ -213,7 +270,7 @@ export function parseTraces(body: Json): Parsed {
       }
     }
   }
-  return { records, usage: [] };
+  return { records, usage: [], prompts: [] };
 }
 
 const COUNT_FIELDS = [
@@ -248,5 +305,21 @@ export function backfillError(row: Json): string | null {
     }
   }
   if (row.reported_cost_usd != null) return "reported_cost_usd must be null for backfill";
+  if (row.query_source != null && typeof row.query_source !== "string") return "query_source must be a string or null";
+  return null;
+}
+
+// Checks a backfill prompt row; returns an error message or null.
+export function promptBackfillError(row: Json): string | null {
+  if (row == null || typeof row !== "object") return "row is not an object";
+  for (const f of ["id", "occurred_at", "session_id"]) {
+    if (typeof row[f] !== "string" || row[f] === "") return `${f} must be a non-empty string`;
+  }
+  if (Number.isNaN(Date.parse(row.occurred_at))) return "occurred_at is not a timestamp";
+  if (row.tool !== "claude_code" && row.tool !== "codex") return "tool must be claude_code or codex";
+  if (!Number.isSafeInteger(row.prompt_length) || row.prompt_length < 0) return "prompt_length must be a non-negative integer";
+  for (const f of ["command_name", "originator"]) {
+    if (row[f] != null && typeof row[f] !== "string") return `${f} must be a string or null`;
+  }
   return null;
 }

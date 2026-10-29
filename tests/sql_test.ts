@@ -168,6 +168,36 @@ Deno.test("usage_daily splits cost by token type, scaled to a reported cost", as
   assertEquals(parts["unpriced-model"], [0.5, 0, 0, 0, 0]);
 });
 
+async function ingestPrompts(db: PGlite, rows: unknown[]) {
+  const r = await db.query<{ prompts_inserted: number }>(
+    "select * from private.ingest('[]'::jsonb, '[]'::jsonb, $1::jsonb)",
+    [JSON.stringify(rows)],
+  );
+  return Number(r.rows[0].prompts_inserted);
+}
+
+Deno.test("prompts are stored once; a re-sent usage row fills a missing query_source", async () => {
+  const db = await setup();
+  const prompt = {
+    id: "p1", occurred_at: "2026-10-01T12:00:00Z", tool: "claude_code", session_id: "s1",
+    prompt_length: 42, command_name: null, originator: null,
+  };
+  assertEquals(await ingestPrompts(db, [prompt, { ...prompt, id: "p2", command_name: "compact" }]), 2);
+  assertEquals(await ingestPrompts(db, [prompt]), 0);
+  const p = await db.query<Record<string, unknown>>("select id, prompt_length, command_name from public.prompt_events order by id");
+  assertEquals(p.rows, [
+    { id: "p1", prompt_length: 42, command_name: null },
+    { id: "p2", prompt_length: 42, command_name: "compact" },
+  ]);
+
+  // Backfilled first without query_source, then re-sent with one.
+  assertEquals((await ingest(db, [], [usage({ id: "u1" })])).usage_inserted, 1);
+  assertEquals(Number((await ingest(db, [], [usage({ id: "u1", query_source: "sdk" })])).usage_inserted), 0);
+  await ingest(db, [], [usage({ id: "u1", query_source: "repl_main_thread" })]);
+  const u = await db.query<{ query_source: string }>("select query_source from public.usage_events where id = 'u1'");
+  assertEquals(u.rows[0].query_source, "sdk");
+});
+
 Deno.test("usage_hourly buckets by local day and hour", async () => {
   const db = await setup();
   await ingest(db, [], [
@@ -206,6 +236,7 @@ Deno.test("raw records older than 30 days are pruned; usage rows are kept", asyn
 Deno.test("only listed dashboard users can read; nobody else can write", async () => {
   const db = await setup();
   await ingest(db, [{ id: "log:a", occurred_at: null, name: "x", payload: {} }], [usage({})]);
+  await ingestPrompts(db, [{ id: "p", occurred_at: "2026-10-01T12:00:00Z", tool: "codex", session_id: "s", prompt_length: 1 }]);
   const countAs = async (role: string, sub: string, table: string) => {
     await db.exec(`set role ${role}; set request.jwt.claim.sub = '${sub}';`);
     try {
@@ -214,13 +245,14 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
       await db.exec("reset role; reset request.jwt.claim.sub;");
     }
   };
-  for (const table of ["public.usage_events", "public.usage_with_cost", "public.telemetry_records", "public.model_pricing"]) {
+  for (const table of ["public.usage_events", "public.usage_with_cost", "public.telemetry_records", "public.model_pricing", "public.prompt_events"]) {
     assert((await countAs("authenticated", OWNER, table)) > 0, `owner reads ${table}`);
     assertEquals(await countAs("authenticated", STRANGER, table), 0, `stranger sees nothing in ${table}`);
   }
   await db.exec("set role authenticated; set request.jwt.claim.sub = '" + OWNER + "';");
   try {
     await assertRejects(() => db.query("insert into public.usage_events (id) values ('x')"));
+    await assertRejects(() => db.query("insert into public.prompt_events (id) values ('x')"));
     await assertRejects(() => db.query("select * from private.ingest('[]', '[]')"));
     await assertRejects(() => db.query("select * from public.dashboard_users"));
   } finally {
@@ -229,6 +261,7 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
   await db.exec("set role anon;");
   try {
     await assertRejects(() => db.query("select * from public.usage_events"));
+    await assertRejects(() => db.query("select * from public.prompt_events"));
     await assertRejects(() => db.query("select * from public.usage_daily(now() - interval '1 day', now())"));
     await assertRejects(() => db.query("select * from public.usage_hourly(now() - interval '1 day', now())"));
   } finally {

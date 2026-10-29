@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Imports per-request usage recorded before OTel export was enabled, from
-// local Claude Code transcripts and Codex rollouts, via the ingest function.
+// Imports per-request usage and prompts recorded before OTel export was
+// enabled, from local Claude Code transcripts and Codex rollouts, via the
+// ingest function.
 //
 //   node backfill/backfill.mjs --before <ISO time> [--dry-run]
 //
@@ -12,7 +13,7 @@
 //   CODETEL_UPLOAD_SECRET  the upload secret
 // Optional: CLAUDE_CONFIG_DIR (default ~/.claude), CODEX_HOME (default ~/.codex)
 //
-// Re-running is safe: rows are keyed by the native request/response ID.
+// Re-running is safe: rows are keyed by the native request/response/prompt ID.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -78,6 +79,42 @@ export async function* claudeRows(file) {
       output_tokens: count(u.output_tokens),
       reasoning_output_tokens: countOrNull(u.output_tokens_details?.thinking_tokens),
       reported_cost_usd: null,
+      // Live telemetry reports scripted runs (claude -p) as query_source "sdk".
+      query_source: e.entrypoint === "sdk-cli" ? "sdk" : null,
+    };
+  }
+}
+
+// Claude Code logs a prompt event for what you type, slash commands and
+// scripted prompts; transcripts mark these by origin, a <command-name> tag
+// or promptSource "sdk". Other user entries (tool results, task
+// notifications, command output, interruptions) are not prompts. Several
+// entries share a promptId; the caller keeps the earliest per ID.
+const COMMAND = /<command-name>(.*?)<\/command-name>/;
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+
+export async function* claudePrompts(file) {
+  for await (const e of jsonLines(file)) {
+    if (e?.type !== "user" || !e.promptId || !e.sessionId || !e.timestamp) continue;
+    if (e.isMeta || e.isCompactSummary) continue;
+    const content = e.message?.content;
+    if (Array.isArray(content) && content.some((b) => b?.type === "tool_result")) continue;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text ?? "").join("") : "";
+    const command = text.match(COMMAND);
+    if (!command && e.origin?.kind !== "human" && e.promptSource !== "sdk") continue;
+    // A slash command's length is that of "/name args", as typed.
+    const args = command ? text.match(COMMAND_ARGS)?.[1] : null;
+    const typed = command ? command[1] + (args ? " " + args : "") : text;
+    yield {
+      id: e.promptId,
+      occurred_at: e.timestamp,
+      tool: "claude_code",
+      session_id: e.sessionId,
+      prompt_length: typed.length,
+      command_name: command ? command[1].replace(/^\//, "") : null,
+      originator: null,
     };
   }
 }
@@ -124,24 +161,58 @@ export async function* codexRows(file) {
   }
 }
 
-// Collects rows before the cutoff, keeping the earliest row per ID.
+// Codex records each prompt as a completed UserMessage item. Subagent
+// sessions (spawned agents, the command reviewer) are skipped: their
+// prompts are written by Codex. The session's originator tells interactive
+// (codex-tui) from scripted (codex_exec) runs.
+export async function* codexPrompts(file) {
+  let meta = null;
+  for await (const e of jsonLines(file)) {
+    const p = e?.payload;
+    if (e?.type === "session_meta" && !meta) {
+      meta = p ?? {};
+      continue;
+    }
+    if (e?.type !== "event_msg" || p?.type !== "item_completed" || p.item?.type !== "UserMessage") continue;
+    if (!meta?.id || meta.source?.subagent || !p.item.id || !e.timestamp) continue;
+    const text = (p.item.content ?? []).filter((b) => b?.type === "text").map((b) => b.text ?? "").join("");
+    yield {
+      id: p.item.id,
+      occurred_at: e.timestamp,
+      tool: "codex",
+      session_id: meta.id,
+      prompt_length: text.length,
+      command_name: null,
+      originator: meta.originator ?? null,
+    };
+  }
+}
+
+// Collects usage and prompt rows before the cutoff, keeping the earliest
+// row per ID.
 export async function collect({ claudeDir, codexDirs, before }) {
   const cutoff = Date.parse(before);
   if (Number.isNaN(cutoff)) throw new Error(`--before is not a valid time: ${before}`);
-  const rows = new Map();
-  const add = (row) => {
+  const usage = new Map();
+  const prompts = new Map();
+  const add = (rows, row) => {
     const t = Date.parse(row.occurred_at);
     if (Number.isNaN(t) || t >= cutoff) return;
     const seen = rows.get(row.id);
     if (!seen || t < Date.parse(seen.occurred_at)) rows.set(row.id, row);
   };
-  for (const f of walk(claudeDir, (n) => n.endsWith(".jsonl"))) for await (const r of claudeRows(f)) add(r);
+  for (const f of walk(claudeDir, (n) => n.endsWith(".jsonl"))) {
+    for await (const r of claudeRows(f)) add(usage, r);
+    for await (const r of claudePrompts(f)) add(prompts, r);
+  }
   for (const dir of codexDirs) {
     for (const f of walk(dir, (n) => n.startsWith("rollout-") && n.endsWith(".jsonl"))) {
-      for await (const r of codexRows(f)) add(r);
+      for await (const r of codexRows(f)) add(usage, r);
+      for await (const r of codexPrompts(f)) add(prompts, r);
     }
   }
-  return [...rows.values()].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  const sorted = (rows) => [...rows.values()].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  return { usage: sorted(usage), prompts: sorted(prompts) };
 }
 
 export function summarize(rows) {
@@ -161,19 +232,21 @@ export function summarize(rows) {
   return groups;
 }
 
-async function upload(rows, url, secret) {
+// key is "usage" or "prompts"; returns how many rows were new.
+async function upload(key, rows, url, secret) {
   let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_ROWS) {
     const batch = rows.slice(i, i + BATCH_ROWS);
     const res = await fetch(`${url.replace(/\/$/, "")}/backfill`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ usage: batch }),
+      body: JSON.stringify({ [key]: batch }),
     });
     const body = await res.text();
-    if (!res.ok) throw new Error(`upload failed at row ${i}: HTTP ${res.status} ${body}`);
-    inserted += JSON.parse(body).inserted;
-    console.log(`uploaded ${Math.min(i + BATCH_ROWS, rows.length)}/${rows.length}`);
+    if (!res.ok) throw new Error(`upload failed at ${key} row ${i}: HTTP ${res.status} ${body}`);
+    const result = JSON.parse(body);
+    inserted += key === "usage" ? result.inserted : result.prompts_inserted;
+    console.log(`uploaded ${key} ${Math.min(i + BATCH_ROWS, rows.length)}/${rows.length}`);
   }
   return inserted;
 }
@@ -188,7 +261,7 @@ async function main() {
   }
   const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
   const codexHome = process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
-  const rows = await collect({
+  const { usage: rows, prompts } = await collect({
     claudeDir: path.join(claudeHome, "projects"),
     codexDirs: [path.join(codexHome, "sessions"), path.join(codexHome, "archived_sessions")],
     before: values.before,
@@ -198,6 +271,13 @@ async function main() {
   for (const [k, g] of summarize(rows)) {
     console.log(`${k}\t${g.requests} requests\tinput ${g.input}\tcached ${g.cached}\tcache write ${g.cacheWrite}\toutput ${g.output}\t${g.first.slice(0, 10)}..${g.last.slice(0, 10)}`);
   }
+  const promptGroups = new Map();
+  for (const p of prompts) {
+    const k = `${p.tool}\t${p.originator ?? (p.command_name ? "slash command" : "prompt")}`;
+    promptGroups.set(k, (promptGroups.get(k) ?? 0) + 1);
+  }
+  console.log(`prompts before ${values.before}: ${prompts.length}`);
+  for (const [k, n] of promptGroups) console.log(`${k}\t${n}`);
   if (values["dry-run"]) return;
 
   const url = process.env.CODETEL_INGEST_URL;
@@ -206,8 +286,10 @@ async function main() {
     console.error("CODETEL_INGEST_URL and CODETEL_UPLOAD_SECRET must be set");
     process.exit(2);
   }
-  const inserted = await upload(rows, url, secret);
-  console.log(`inserted ${inserted} new rows (${rows.length - inserted} already present)`);
+  const inserted = await upload("usage", rows, url, secret);
+  console.log(`inserted ${inserted} new usage rows (${rows.length - inserted} already present)`);
+  const promptsInserted = await upload("prompts", prompts, url, secret);
+  console.log(`inserted ${promptsInserted} new prompts (${prompts.length - promptsInserted} already present)`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

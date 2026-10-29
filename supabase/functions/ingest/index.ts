@@ -2,12 +2,19 @@
 //
 //   POST /ingest/v1/logs     OTLP logs
 //   POST /ingest/v1/traces   OTLP traces
-//   POST /ingest/backfill    {"usage": [UsageEvent, ...]}
+//   POST /ingest/backfill    {"usage": [UsageEvent, ...], "prompts": [PromptEvent, ...]}
 //
 // Every request needs `Authorization: Bearer <UPLOAD_SECRET>`.
 
 import postgres from "npm:postgres@3.4.9";
-import { backfillError, type Parsed, parseLogs, parseTraces, sha256Hex } from "../_shared/telemetry.ts";
+import {
+  backfillError,
+  type Parsed,
+  parseLogs,
+  parseTraces,
+  promptBackfillError,
+  sha256Hex,
+} from "../_shared/telemetry.ts";
 
 const MAX_BACKFILL_ROWS = 5000;
 
@@ -53,13 +60,23 @@ class HttpError extends Error {
   }
 }
 
-async function store({ records, usage }: Parsed) {
-  if (records.length === 0 && usage.length === 0) return { records_inserted: 0, usage_inserted: 0 };
+async function store({ records, usage, prompts }: Parsed) {
+  if (records.length === 0 && usage.length === 0 && prompts.length === 0) {
+    return { records_inserted: 0, usage_inserted: 0, prompts_inserted: 0 };
+  }
   // Sent as text: postgres.js would JSON-encode a string bound to a jsonb parameter again.
   const [row] = await sql`
-    select * from private.ingest(${JSON.stringify(records)}::text::jsonb, ${JSON.stringify(usage)}::text::jsonb)
+    select * from private.ingest(
+      ${JSON.stringify(records)}::text::jsonb,
+      ${JSON.stringify(usage)}::text::jsonb,
+      ${JSON.stringify(prompts)}::text::jsonb
+    )
   `;
-  return { records_inserted: Number(row.records_inserted), usage_inserted: Number(row.usage_inserted) };
+  return {
+    records_inserted: Number(row.records_inserted),
+    usage_inserted: Number(row.usage_inserted),
+    prompts_inserted: Number(row.prompts_inserted),
+  };
 }
 
 async function handle(req: Request): Promise<Response> {
@@ -80,16 +97,30 @@ async function handle(req: Request): Promise<Response> {
   if (path.endsWith("/backfill")) {
     // deno-lint-ignore no-explicit-any
     const body = await readJson(req) as any;
-    const usage = body?.usage;
-    if (!Array.isArray(usage)) throw new HttpError(400, "expected {\"usage\": [...]}");
-    if (usage.length > MAX_BACKFILL_ROWS) throw new HttpError(413, `at most ${MAX_BACKFILL_ROWS} rows per request`);
+    const usage = body?.usage ?? [];
+    const prompts = body?.prompts ?? [];
+    if (!Array.isArray(usage) || !Array.isArray(prompts)) {
+      throw new HttpError(400, "expected {\"usage\": [...], \"prompts\": [...]}");
+    }
+    if (usage.length + prompts.length > MAX_BACKFILL_ROWS) {
+      throw new HttpError(413, `at most ${MAX_BACKFILL_ROWS} rows per request`);
+    }
     for (const [i, row] of usage.entries()) {
       const error = backfillError(row);
-      if (error) throw new HttpError(400, `row ${i}: ${error}`);
+      if (error) throw new HttpError(400, `usage row ${i}: ${error}`);
     }
-    const result = await store({ records: [], usage });
-    console.log(JSON.stringify({ path: "backfill", received: usage.length, ...result }));
-    return json(200, { received: usage.length, inserted: result.usage_inserted });
+    for (const [i, row] of prompts.entries()) {
+      const error = promptBackfillError(row);
+      if (error) throw new HttpError(400, `prompt row ${i}: ${error}`);
+    }
+    const result = await store({ records: [], usage, prompts });
+    console.log(JSON.stringify({ path: "backfill", received: usage.length, prompts: prompts.length, ...result }));
+    return json(200, {
+      received: usage.length,
+      inserted: result.usage_inserted,
+      prompts_received: prompts.length,
+      prompts_inserted: result.prompts_inserted,
+    });
   }
   return json(404, { error: "unknown path" });
 }

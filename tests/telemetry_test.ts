@@ -6,6 +6,7 @@ import {
   type Parsed,
   parseLogs,
   parseTraces,
+  promptBackfillError,
   type UsageEvent,
 } from "../supabase/functions/_shared/telemetry.ts";
 
@@ -19,11 +20,12 @@ function fixture(name: string): Upload[] {
 }
 
 async function parseAll(uploads: Upload[]): Promise<Parsed> {
-  const out: Parsed = { records: [], usage: [] };
+  const out: Parsed = { records: [], usage: [], prompts: [] };
   for (const u of uploads) {
     const p = u.path === "/v1/logs" ? await parseLogs(u.body) : parseTraces(u.body);
     out.records.push(...p.records);
     out.usage.push(...p.usage);
+    out.prompts.push(...p.prompts);
   }
   return out;
 }
@@ -117,6 +119,34 @@ Deno.test("claude: api_request logs become usage rows with reported cost", async
   assertEquals(parsed.usage.map((r) => r.reported_cost_usd), [0.0157472, 0.001563]);
 });
 
+Deno.test("claude: user_prompt logs become prompt rows keyed by prompt ID", async () => {
+  const parsed = await parseAll(fixture("claude_session"));
+  assertEquals(parsed.prompts, [{
+    id: "00000000-0000-4000-8000-000000000009",
+    occurred_at: "2026-10-28T16:08:14.669Z",
+    tool: "claude_code",
+    session_id: "00000000-0000-4000-8000-000000000008",
+    prompt_length: 143,
+    command_name: null,
+    originator: null,
+  }]);
+  // The fixture was recorded with claude -p.
+  for (const row of parsed.usage) assertEquals(row.query_source, "sdk");
+});
+
+Deno.test("codex: user_prompt logs become prompt rows with the originator", async () => {
+  const a = await parseAll(fixture("codex_new_session"));
+  assertEquals(a.prompts.map((p) => [p.tool, p.session_id, p.prompt_length, p.originator, p.command_name]), [
+    ["codex", "00000000-0000-4000-8000-000000000001", 174, "codex_exec", null],
+  ]);
+  assert(a.prompts[0].id.startsWith("codex:"));
+  const again = await parseAll(fixture("codex_new_session"));
+  assertEquals(again.prompts[0].id, a.prompts[0].id);
+  const resumed = await parseAll(fixture("codex_resumed_session"));
+  assertEquals(resumed.prompts.map((p) => p.prompt_length), [73]);
+  assert(resumed.prompts[0].id !== a.prompts[0].id);
+});
+
 Deno.test("backfill rows are validated", () => {
   const ok = {
     id: "resp_1",
@@ -142,4 +172,25 @@ Deno.test("backfill rows are validated", () => {
   assert(backfillError({ ...ok, occurred_at: "yesterday" }));
   assert(backfillError({ ...ok, reported_cost_usd: 1 }));
   assert(backfillError({ ...ok, id: "" }));
+  assertEquals(backfillError({ ...ok, query_source: "sdk" }), null);
+  assert(backfillError({ ...ok, query_source: 1 }));
+});
+
+Deno.test("backfill prompt rows are validated", () => {
+  const ok = {
+    id: "p1",
+    occurred_at: "2026-10-01T00:00:00Z",
+    tool: "claude_code",
+    session_id: "s",
+    prompt_length: 12,
+    command_name: null,
+    originator: null,
+  };
+  assertEquals(promptBackfillError(ok), null);
+  assertEquals(promptBackfillError({ ...ok, command_name: "compact" }), null);
+  assert(promptBackfillError({ ...ok, tool: "other" }));
+  assert(promptBackfillError({ ...ok, prompt_length: -1 }));
+  assert(promptBackfillError({ ...ok, prompt_length: "12" }));
+  assert(promptBackfillError({ ...ok, session_id: "" }));
+  assert(promptBackfillError({ ...ok, originator: 3 }));
 });

@@ -1,13 +1,13 @@
 # codetel
 
-Token usage and estimated cost for Claude Code and Codex, collected from every
-machine into one Supabase project and shown on a static dashboard.
+Token usage, estimated cost and prompts for Claude Code and Codex, collected
+from every machine into one Supabase project and shown on a static dashboard.
 
 ```text
 Claude Code / Codex built-in OTel exporters (each machine)
     -> OTLP HTTP/JSON, Authorization: Bearer <upload secret>
     -> Supabase Edge Function `ingest`
-    -> Postgres (raw records + one row per model request)
+    -> Postgres (raw records + one row per model request and per prompt)
     <- dashboard on GitHub Pages (Supabase Auth email link, read-only via RLS)
 ```
 
@@ -21,7 +21,7 @@ enabled is imported once per machine by `backfill/backfill.mjs`.
 | --- | --- |
 | `supabase/migrations/` | Schema, cost view, `usage_daily()` and `usage_hourly()` RPCs, `private.ingest()`, RLS, raw-record cleanup job |
 | `supabase/functions/ingest/` | Edge Function: auth, routing, gzip, DB write |
-| `supabase/functions/_shared/telemetry.ts` | OTLP parsing and usage normalization (pure) |
+| `supabase/functions/_shared/telemetry.ts` | OTLP parsing, usage and prompt normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |
 | `backfill/backfill.mjs` | One-off import from local transcripts (Node, no dependencies) |
 | `docs/` | Dashboard (plain HTML/JS), served by GitHub Pages |
@@ -39,6 +39,8 @@ model happens in the dashboard.
   Claude. `reasoning_output_tokens` is part of `output_tokens`, never added
   to it.
 - `reported_cost_usd` is Claude Code's own cost, present for OTel rows.
+- `query_source` is Claude Code's request source: `sdk` for scripted runs
+  (`claude -p`), `repl_main_thread` and others for interactive use.
 - IDs:
 
   | | Claude Code | Codex (OTel) | Codex (backfill) |
@@ -46,6 +48,18 @@ model happens in the dashboard.
   | `id` | native `request_id` | hash of conversation, event time, model, counts | native `response_id` |
   | `session_id` | `session.id` | `conversation.id` | `thread_id` |
   | `turn_id` | `prompt.id` (OTel only) | none in logs | `turn_id` |
+
+**`prompt_events`**: one row per prompt submitted, without its text:
+`prompt_length` (characters), `command_name` for Claude slash commands, and
+Codex's `originator` (`codex-tui` interactive, `codex_exec` scripted). Every
+prompt is stored; queries decide which count as yours:
+
+- Codex: `originator` is not `codex_exec`.
+- Claude Code: the session has no usage row with `query_source = 'sdk'`.
+
+IDs are Claude's `prompt.id` (the same as transcripts' `promptId`), a hash of
+conversation, event time and length for Codex OTel, and the `UserMessage` item
+ID for Codex backfill.
 
 **`telemetry_records`**: raw OTel records as exported (`{resource, scope,
 record|span}`), so parsers can be fixed and data re-derived. All log records
@@ -117,6 +131,13 @@ node backfill/backfill.mjs --before 2026-10-28T19:00:00Z
 Backfilled Claude rows have no reported cost and are priced from
 `model_pricing`.
 
+Prompts are imported the way live telemetry reports them. Claude: transcript
+entries typed by you (`origin.kind = human`), slash commands and scripted
+prompts (`promptSource = sdk`; their usage rows get `query_source = sdk`);
+tool results, task notifications and command output are skipped. Codex:
+`UserMessage` items, with the session's `originator`; subagent sessions
+(spawned agents, the command reviewer) are skipped.
+
 ## Development
 
 Tests run on Deno with PGlite (Postgres in WASM); keep tool caches out of the
@@ -157,6 +178,10 @@ admin API and added to `public.dashboard_users`.
 
 ## Assumptions to revisit
 
+- Codex reports some internal helper conversations as prompts: a hidden
+  read-only conversation on a small model, started with each new session
+  (likely title generation), sends `codex.user_prompt` with `originator:
+  codex-tui`. These count as yours for now (about one per new session).
 - Codex cache writes: assumed to be included in Codex's input count and
   priced at the short (30m) cache-write rate. No nonzero cache write has been
   observed yet.

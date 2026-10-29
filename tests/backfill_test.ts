@@ -1,7 +1,7 @@
 // Backfill parsing on small synthetic transcripts shaped like real ones.
 
 import { assertEquals } from "jsr:@std/assert@1";
-import { backfillError } from "../supabase/functions/_shared/telemetry.ts";
+import { backfillError, promptBackfillError } from "../supabase/functions/_shared/telemetry.ts";
 // @ts-types="../backfill/backfill.d.ts"
 import { collect } from "../backfill/backfill.mjs";
 
@@ -71,7 +71,7 @@ Deno.test("backfill collects deduplicated rows before the cutoff", async () => {
     await writeJsonl(`${claudeDir}/-proj/sess-2.jsonl`, [claudeEntry("req_a", "2026-10-02T00:00:00Z", { sessionId: "sess-2" })]);
     await writeJsonl(`${dir}/codex/sessions/2026/10/01/rollout-x.jsonl`, codexLines());
 
-    const rows = await collect({
+    const { usage: rows } = await collect({
       claudeDir,
       codexDirs: [`${dir}/codex/sessions`, `${dir}/codex/archived_sessions`],
       before: "2026-10-04T00:00:00Z",
@@ -90,6 +90,72 @@ Deno.test("backfill collects deduplicated rows before the cutoff", async () => {
     );
     assertEquals(codex2.model, "gpt-6-astra");
     for (const r of rows) assertEquals(backfillError(r), null, r.id);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+function claudeUser(promptId: string, timestamp: string, content: unknown, over: Record<string, unknown> = {}) {
+  return { type: "user", promptId, sessionId: "sess-1", timestamp, entrypoint: "cli", message: { role: "user", content }, ...over };
+}
+
+Deno.test("backfill collects prompts the way live telemetry reports them", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const claudeDir = `${dir}/claude/projects`;
+    const human = { origin: { kind: "human" }, promptSource: "typed" };
+    await writeJsonl(`${claudeDir}/-proj/sess-1.jsonl`, [
+      claudeUser("p1", "2026-10-01T09:00:00Z", "fix the bug", human),
+      claudeUser("p1", "2026-10-01T09:00:05Z", [{ type: "tool_result", content: "ok" }]),
+      claudeUser("p2", "2026-10-01T09:01:00Z", "<command-name>/rename</command-name> <command-message>rename</command-message> <command-args>New name</command-args>"),
+      claudeUser("p2", "2026-10-01T09:01:00Z", "<local-command-caveat>…</local-command-caveat>", { isMeta: true }),
+      claudeUser("p3", "2026-10-01T09:02:00Z", "<task-notification>done</task-notification>", { origin: { kind: "task-notification" }, promptSource: "system" }),
+      claudeUser("p4", "2026-10-01T09:03:00Z", "[Request interrupted by user]"),
+      claudeUser("p5", "2026-10-01T09:04:00Z", "summary", { isCompactSummary: true }),
+      claudeUser("p6", "2026-10-01T09:05:00Z", [{ type: "text", text: "pasted " }, { type: "image" }, { type: "text", text: "text" }], human),
+      claudeUser("p7", "2026-10-05T00:00:00Z", "after the cutoff", human),
+      { ...claudeEntry("req_s", "2026-10-01T10:00:01Z"), entrypoint: "sdk-cli", sessionId: "sess-s" },
+    ]);
+    // A scripted run, and a resumed session that copies p1 with a later time.
+    await writeJsonl(`${claudeDir}/-proj/sess-s.jsonl`, [
+      claudeUser("ps", "2026-10-01T10:00:00Z", "Reply OK", { sessionId: "sess-s", entrypoint: "sdk-cli", promptSource: "sdk" }),
+    ]);
+    await writeJsonl(`${claudeDir}/-proj/sess-2.jsonl`, [claudeUser("p1", "2026-10-02T00:00:00Z", "fix the bug", { ...human, sessionId: "sess-2" })]);
+
+    const userMessage = (id: string, timestamp: string, text: string) => ({
+      type: "event_msg",
+      timestamp,
+      payload: { type: "item_completed", item: { type: "UserMessage", id, content: [{ type: "text", text, text_elements: [] }] } },
+    });
+    await writeJsonl(`${dir}/codex/sessions/2026/10/01/rollout-tui.jsonl`, [
+      { type: "session_meta", timestamp: "2026-10-01T10:00:00Z", payload: { id: "thread-1", originator: "codex-tui", source: "cli" } },
+      userMessage("u1", "2026-10-01T10:00:01Z", "hello codex"),
+      { type: "response_item", timestamp: "2026-10-01T10:00:01Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md" }] } },
+    ]);
+    await writeJsonl(`${dir}/codex/sessions/2026/10/01/rollout-exec.jsonl`, [
+      { type: "session_meta", timestamp: "2026-10-01T11:00:00Z", payload: { id: "thread-2", originator: "codex_exec", source: "exec" } },
+      userMessage("u2", "2026-10-01T11:00:01Z", "scripted"),
+    ]);
+    await writeJsonl(`${dir}/codex/sessions/2026/10/01/rollout-guardian.jsonl`, [
+      { type: "session_meta", timestamp: "2026-10-01T12:00:00Z", payload: { id: "thread-3", originator: "codex-tui", source: { subagent: { other: "guardian" } } } },
+      userMessage("u3", "2026-10-01T12:00:01Z", "The following is the Codex agent history"),
+    ]);
+
+    const { usage, prompts } = await collect({
+      claudeDir,
+      codexDirs: [`${dir}/codex/sessions`],
+      before: "2026-10-04T00:00:00Z",
+    });
+    assertEquals(prompts.map((p) => [p.id, p.session_id, p.prompt_length, p.command_name, p.originator]), [
+      ["p1", "sess-1", 11, null, null],
+      ["p2", "sess-1", 16, "rename", null],
+      ["p6", "sess-1", 11, null, null],
+      ["ps", "sess-s", 8, null, null],
+      ["u1", "thread-1", 11, null, "codex-tui"],
+      ["u2", "thread-2", 8, null, "codex_exec"],
+    ]);
+    for (const p of prompts) assertEquals(promptBackfillError(p), null, p.id);
+    assertEquals(usage.find((u) => u.id === "req_s")?.query_source, "sdk");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
