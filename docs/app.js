@@ -1,6 +1,6 @@
 // codetel dashboard: signs in with an email link, loads daily usage through
-// the usage_daily and usage_hourly RPCs, daily prompt counts through
-// prompt_daily, and the latest rows of usage_with_cost (all RLS-protected),
+// the usage_daily and usage_hourly RPCs, hourly prompt counts through
+// prompt_hourly, and the latest rows of usage_with_cost (all RLS-protected),
 // and renders tiles, a chart, a calendar of your prompts, weekday and
 // hour-of-day charts, and tables.
 
@@ -21,7 +21,8 @@ const state = {
   rows: [], // all-time daily rows from usage_daily
   hourly: [], // all-time (day, hour) rows from usage_hourly
   latest: [], // the 10 most recent requests
-  prompts: [], // all-time (day, tool) counts of your prompts from prompt_daily
+  prompts: [], // all-time (day, hour, tool) counts of your prompts from prompt_hourly
+  calOpen: false, // calendar's weekday and hour-of-day breakdown shown
   days: 30,
   group: "tool",
   metric: "cost", // "cost" or "tokens"
@@ -55,6 +56,7 @@ function savePrefs() {
 
 const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 const whole = new Intl.NumberFormat();
+const oneDecimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 function usd(v) {
   if (v === 0) return "$0.00";
@@ -112,7 +114,12 @@ async function fetchRows() {
 }
 
 async function fetchPrompts() {
-  return (await fetchAll("prompt_daily")).map((r) => ({ day: r.day, tool: r.tool, prompts: Number(r.prompts) }));
+  return (await fetchAll("prompt_hourly")).map((r) => ({
+    day: r.day,
+    hour: Number(r.hour),
+    tool: r.tool,
+    prompts: Number(r.prompts),
+  }));
 }
 
 async function fetchHourly() {
@@ -202,9 +209,10 @@ function render() {
   const title = tokens ? "Tokens per day" : "Estimated cost per day";
   $("chart-title").textContent = title;
   $("usage-chart").setAttribute("aria-label", title);
-  $("chart-note").hidden = !tokens;
+  $("chart-info").hidden = !tokens;
   renderChart("usage-chart", days, series, tokens ? (s) => s.tokens : (s) => s.cost, tokens ? (v) => compact.format(v) : usd);
   renderCalendar();
+  renderPromptPatterns();
   renderPatterns(days);
   renderTable(inRange);
   renderLatest();
@@ -570,8 +578,7 @@ function renderCalendar() {
     c[r.tool] = (c[r.tool] ?? 0) + r.prompts;
     byDay.set(r.day, c);
   }
-  const today = new Date();
-  const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1);
+  const { today, yearAgo } = calendarWindow();
   const start = new Date(yearAgo.getFullYear(), yearAgo.getMonth(), yearAgo.getDate() - ((yearAgo.getDay() + 6) % 7));
   const days = [];
   for (let d = start; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) days.push(d);
@@ -621,10 +628,53 @@ function renderCalendar() {
     place(el, (i % 7) + 2, week + 2);
   });
   grid.setAttribute("aria-label", "Your prompts per day over the last 12 months");
-  $("cal-sub").textContent = "Prompts you sent per day, in Claude Code and Codex. Scripted runs are left out.";
+  $("cal-sub").textContent = "Prompts you sent per day, in Claude Code and Codex.";
   $("cal-summary").textContent = `${plural(total, "prompt")} in total, ${plural(active, "active day")}.`;
   const wrap = $("cal-wrap");
   wrap.scrollLeft = wrap.scrollWidth;
+}
+
+// The calendar's 12 months: from a year ago tomorrow through today, local time.
+function calendarWindow() {
+  const today = new Date();
+  return { today, yearAgo: new Date(today.getFullYear() - 1, today.getMonth(), today.getDate() + 1) };
+}
+
+// Your prompts per day on average by weekday and by hour over the calendar's
+// 12 months, shown under the calendar when its heading is pressed.
+function renderPromptPatterns() {
+  $("cal-toggle").setAttribute("aria-expanded", String(state.calOpen));
+  $("cal-patterns").hidden = !state.calOpen;
+  if (!state.calOpen) return;
+  const { today, yearAgo } = calendarWindow();
+  const first = localDay(yearAgo), last = localDay(today);
+  const dowCount = Array(7).fill(0);
+  let nDays = 0;
+  for (let d = yearAgo; d <= today; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    dowCount[d.getDay()]++;
+    nDays++;
+  }
+  const byDow = Array(7).fill(0), byHour = Array(24).fill(0);
+  for (const r of state.prompts) {
+    if (r.day < first || r.day > last) continue;
+    byDow[new Date(r.day + "T00:00:00").getDay()] += r.prompts;
+    byHour[r.hour] += r.prompts;
+  }
+  const dowAvg = WEEKDAYS.map((dow) => byDow[dow] / Math.max(1, dowCount[dow]));
+  const hourAvg = byHour.map((n) => n / nDays);
+  const any = dowAvg.some((v) => v > 0);
+  const tip = (v) => [` ${oneDecimal.format(v)} prompts per day`];
+  $("cal-hour-sub").textContent = `Prompts per day on average, last 12 months, ${TZ} time.`;
+  renderBars("cal-dow", "cal-dow-chart", {
+    labels: WEEKDAYS.map((d) => weekdayName(d, "short")), values: dowAvg, peak: any ? argmax(dowAvg) : -1,
+    fmt: compact.format, label: "Prompts", aria: "Your prompts per day on average, by weekday",
+    title: (i) => weekdayName(WEEKDAYS[i], "long"), tip: (i) => tip(dowAvg[i]),
+  });
+  renderBars("cal-hour", "cal-hour-chart", {
+    labels: Array.from({ length: 24 }, (_, h) => hourLabel(h)), values: hourAvg, peak: any ? argmax(hourAvg) : -1,
+    fmt: compact.format, label: "Prompts", aria: "Your prompts per day on average, by hour of day",
+    title: (i) => hourSpan(i), tip: (i) => tip(hourAvg[i]),
+  });
 }
 
 // Average per day by weekday and by hour, from the hourly rows in range.
@@ -653,28 +703,36 @@ function renderPatterns(days) {
   const any = dowAvg.some((c) => pick(c) > 0);
   const peakDow = argmax(dowAvg.map(pick)), peakHour = argmax(hourAvg.map(pick));
   const per = `${metricName()} per day on average, ${rangeLabel()}`;
-  $("dow-sub").textContent = any ? `${per}. Busiest: ${weekdayName(WEEKDAYS[peakDow], "long")}.` : `${per}.`;
-  $("hour-sub").textContent = any ? `${per}, ${TZ} time. Busiest: ${hourSpan(peakHour)}.` : `${per}, ${TZ} time.`;
+  $("dow-sub").textContent = `${per}.`;
+  $("hour-sub").textContent = `${per}, ${TZ} time.`;
 
-  renderBars("dow", "dow-chart", WEEKDAYS.map((d) => weekdayName(d, "short")), dowAvg, any ? peakDow : -1, fmt,
-    (i) => weekdayName(WEEKDAYS[i], "long"));
-  renderBars("hour", "hour-chart", Array.from({ length: 24 }, (_, h) => hourLabel(h)), hourAvg, any ? peakHour : -1, fmt,
-    (i) => hourSpan(i));
+  const tip = (c) => [` ${fmt(pick(c))} per day`, ` ${whole.format(Math.round(c.requests))} requests per day`];
+  const aria = (by) => `${metricName()} per day on average, by ${by}`;
+  renderBars("dow", "dow-chart", {
+    labels: WEEKDAYS.map((d) => weekdayName(d, "short")), values: dowAvg.map(pick), peak: any ? peakDow : -1,
+    fmt, label: metricName(), aria: aria("weekday"),
+    title: (i) => weekdayName(WEEKDAYS[i], "long"), tip: (i) => tip(dowAvg[i]),
+  });
+  renderBars("hour", "hour-chart", {
+    labels: Array.from({ length: 24 }, (_, h) => hourLabel(h)), values: hourAvg.map(pick), peak: any ? peakHour : -1,
+    fmt, label: metricName(), aria: aria("hour of day"),
+    title: (i) => hourSpan(i), tip: (i) => tip(hourAvg[i]),
+  });
 }
 
 // One-series bar chart; the peak bar is full strength, the rest lighter.
-function renderBars(name, canvasId, labels, cells, peak, fmt, title) {
-  const pick = metricPick();
+// tip(i) gives the tooltip's lines for bar i.
+function renderBars(name, canvasId, { labels, values, peak, fmt, label, aria, title, tip }) {
   const ink = cssVar("--text-secondary");
   const color = cssVar("--series-1");
-  const colors = cells.map((_, i) => (i === peak ? color : color + "73"));
+  const colors = values.map((_, i) => (i === peak ? color : color + "73"));
   const config = {
     type: "bar",
     data: {
       labels,
       datasets: [{
-        label: metricName(),
-        data: cells.map(pick),
+        label,
+        data: values,
         backgroundColor: colors,
         hoverBackgroundColor: color,
         borderRadius: { topLeft: 4, topRight: 4 },
@@ -696,14 +754,13 @@ function renderBars(name, canvasId, labels, cells, peak, fmt, title) {
         tooltip: {
           callbacks: {
             title: (items) => title(items[0].dataIndex),
-            label: (item) => ` ${fmt(item.raw)} per day`,
-            afterLabel: (item) => ` ${whole.format(Math.round(cells[item.dataIndex].requests))} requests per day`,
+            label: (item) => tip(item.dataIndex),
           },
         },
       },
     },
   };
-  $(canvasId).setAttribute("aria-label", `${metricName()} per day on average, by ${name === "dow" ? "weekday" : "hour of day"}`);
+  $(canvasId).setAttribute("aria-label", aria);
   state.charts[name]?.destroy();
   state.charts[name] = new Chart($(canvasId), config);
 }
@@ -935,6 +992,11 @@ for (const tile of document.querySelectorAll(".tile[data-kpi]")) {
     }
   });
 }
+
+$("cal-toggle").addEventListener("click", () => {
+  state.calOpen = !state.calOpen;
+  renderPromptPatterns();
+});
 
 $("refresh").addEventListener("click", load);
 

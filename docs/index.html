@@ -43,12 +43,24 @@
 
     <section id="dashboard" hidden>
       <section class="card">
-        <h2>Your activity, last 12 months</h2>
+        <h2><button type="button" class="h2-toggle" id="cal-toggle" aria-expanded="false" aria-controls="cal-patterns">Your activity, last 12 months</button> <button type="button" class="info" aria-label="Scripted runs (claude -p, codex exec) are left out.">i</button></h2>
         <p class="muted small heat-sub" id="cal-sub"></p>
         <div class="cal-wrap" id="cal-wrap"><div class="calendar" id="calendar" role="img"></div></div>
         <div class="heat-foot">
           <p id="cal-summary" class="muted small"></p>
           <div class="heat-scale muted small" aria-hidden="true">Less <i class="cal-0"></i><i class="cal-1"></i><i class="cal-2"></i><i class="cal-3"></i><i class="cal-4"></i> More</div>
+        </div>
+        <div class="pair cal-patterns" id="cal-patterns" hidden>
+          <div>
+            <h3>By weekday</h3>
+            <p class="muted small heat-sub">Prompts per day on average, last 12 months.</p>
+            <div class="chart chart-sm"><canvas id="cal-dow-chart" role="img"></canvas></div>
+          </div>
+          <div>
+            <h3>By hour of day</h3>
+            <p class="muted small heat-sub" id="cal-hour-sub"></p>
+            <div class="chart chart-sm"><canvas id="cal-hour-chart" role="img"></canvas></div>
+          </div>
         </div>
       </section>
 
@@ -95,9 +107,8 @@
       <div id="unpriced" class="notice" hidden></div>
 
       <section class="card">
-        <h2 id="chart-title">Estimated cost per day</h2>
+        <h2><span id="chart-title">Estimated cost per day</span> <button type="button" class="info" id="chart-info" aria-label="Uncached input, cached input, cache writes, and output combined." hidden>i</button></h2>
         <div class="chart"><canvas id="usage-chart" aria-label="Estimated cost per day" role="img"></canvas></div>
-        <p id="chart-note" class="muted small" hidden>Uncached input, cached input, cache writes, and output combined.</p>
       </section>
 
       <div class="pair">
@@ -129,7 +140,6 @@
             <tbody id="model-table"></tbody>
           </table>
         </div>
-        <p class="muted small">Costs are API-equivalent estimates: Claude Code reports its own cost; other usage is priced from the price table. Requests for models without a price are counted but not priced.</p>
       </section>
 
       <section class="card">

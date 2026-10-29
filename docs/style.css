@@ -199,6 +199,15 @@ input {
 .pair { display: grid; grid-template-columns: 2fr 3fr; gap: 16px; margin-bottom: 16px; }
 .pair .card { margin-bottom: 0; min-width: 0; }
 .chart-sm { height: 220px; }
+
+/* The calendar heading opens its weekday and hour-of-day breakdown. */
+.h2-toggle { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.h2-toggle::after { content: " ▾"; color: var(--text-muted); font-weight: 400; }
+.h2-toggle[aria-expanded="true"]::after { content: " ▴"; }
+.h2-toggle:hover { color: var(--accent); }
+.cal-patterns { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--grid); }
+.cal-patterns > div { min-width: 0; }
+h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
 .cal-wrap { overflow-x: auto; padding-bottom: 4px; }
 .calendar {
   display: grid;
@@ -244,6 +253,44 @@ input {
 }
 .tip .tip-head { font-weight: 600; }
 .tip .tip-dim { color: var(--text-secondary); }
+
+/* (i) next to a heading; its aria-label shows on hover, or on tap via focus,
+   anchored to the heading so it stays inside the card on narrow screens. */
+h2:has(> .info) { position: relative; }
+.info {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-left: 2px;
+  vertical-align: 1px;
+  border: 1px solid var(--text-muted);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font: italic 600 11px/14px Georgia, serif;
+  cursor: help;
+}
+.info[hidden] { display: none; }
+.info:hover, .info:focus-visible { color: var(--text-primary); border-color: var(--text-primary); }
+.info::after {
+  content: attr(aria-label);
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: max-content;
+  max-width: min(320px, 100%);
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 400 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-align: left;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.info:hover::after, .info:focus::after { display: block; }
 
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }

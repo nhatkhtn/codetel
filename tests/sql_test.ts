@@ -198,7 +198,7 @@ Deno.test("prompts are stored once; a re-sent usage row fills a missing query_so
   assertEquals(u.rows[0].query_source, "sdk");
 });
 
-Deno.test("prompt_daily counts only your prompts", async () => {
+Deno.test("prompt_hourly counts only your prompts", async () => {
   const db = await setup();
   const prompt = (id: string, over: Record<string, unknown>) => ({
     id, occurred_at: "2026-10-01T12:00:00Z", tool: "claude_code", session_id: "s1",
@@ -217,12 +217,13 @@ Deno.test("prompt_daily counts only your prompts", async () => {
     usage({ id: "u2", tool: "claude_code", session_id: "scripted", query_source: "sdk" }),
   ]);
   const r = await db.query<Record<string, string>>(
-    `select day::text, tool, prompts::int from public.prompt_daily('2026-10-01', '2026-10-03', 'America/New_York') order by day, tool`,
+    `select day::text, hour, tool, prompts::int from public.prompt_hourly('2026-10-01', '2026-10-03', 'America/New_York') order by day, hour, tool`,
   );
-  // 03:00 UTC on Oct 2 is Oct 1 in New York.
-  assertEquals(r.rows.map((x) => [x.day, x.tool, x.prompts]), [
-    ["2026-10-01", "claude_code", 3],
-    ["2026-10-01", "codex", 1],
+  // 03:00 UTC on Oct 2 is 23:00 on Oct 1 in New York.
+  assertEquals(r.rows.map((x) => [x.day, x.hour, x.tool, x.prompts]), [
+    ["2026-10-01", 8, "claude_code", 2],
+    ["2026-10-01", 8, "codex", 1],
+    ["2026-10-01", 23, "claude_code", 1],
   ]);
 });
 
@@ -292,7 +293,7 @@ Deno.test("only listed dashboard users can read; nobody else can write", async (
     await assertRejects(() => db.query("select * from public.prompt_events"));
     await assertRejects(() => db.query("select * from public.usage_daily(now() - interval '1 day', now())"));
     await assertRejects(() => db.query("select * from public.usage_hourly(now() - interval '1 day', now())"));
-    await assertRejects(() => db.query("select * from public.prompt_daily(now() - interval '1 day', now())"));
+    await assertRejects(() => db.query("select * from public.prompt_hourly(now() - interval '1 day', now())"));
   } finally {
     await db.exec("reset role;");
   }
