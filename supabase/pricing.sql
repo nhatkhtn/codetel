@@ -2,6 +2,7 @@
 -- Sources (checked 2026-10-28):
 --   https://platform.claude.com/docs/en/about-claude/pricing
 --   https://developers.openai.com/api/docs/pricing
+-- Fable 5.2: https://platform.claude.com/docs/en/models/fable-5-2/overview
 --
 -- Current prices apply to all history, including backfilled usage
 -- (effective_from 2000-01-01). Past price changes are not tracked.
@@ -21,6 +22,7 @@
 insert into public.model_pricing
   (model, effective_from, min_prompt_tokens, input_rate, cached_input_rate, cache_write_short_rate, cache_write_long_rate, output_rate)
 values
+  ('claude-fable-5-2',  '2000-01-01', 0,      8.00,  0.20, 10.00,  16.00,  40.00),
   ('claude-fable-5-1',  '2000-01-01', 0,     10.00,  0.25, 12.50,  20.00,  50.00),
   ('claude-fable-5',    '2000-01-01', 0,     10.00,  1.00, 12.50,  20.00,  50.00),
   ('claude-opus-5-5',   '2000-01-01', 0,      4.00,  0.20,  5.00,   8.00,  20.00),

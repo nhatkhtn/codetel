@@ -564,7 +564,7 @@ function cellTip(head, c) {
   const lines = c.total
     ? Object.entries(TOOL_NAMES).filter(([t]) => c[t]).map(([t, name]) => `${name}: ${whole.format(c[t])}`)
     : [];
-  return { head, lines: [plural(c.total, "prompt"), ...(lines.length > 1 ? lines : [])], note: "" };
+  return { head, lines: [plural(c.total, "prompt"), ...lines], note: "" };
 }
 
 // GitHub-style calendar of your prompts over the last year, one square per
