@@ -65,7 +65,9 @@ ID for Codex backfill.
 **`telemetry_records`**: raw OTel records as exported (`{resource, scope,
 record|span}`), so parsers can be fixed and data re-derived. All log records
 are kept except tool events (`tool_decision`, `tool_result` and their
-`codex.` versions), which carry no usage. Of Codex's ~1000 spans per turn,
+`codex.` versions), which carry no usage, and Codex's connection noise
+(`codex.startup_phase`, `codex.websocket_connect`, `codex.websocket_request`,
+and every `codex.sse_event` except `response.completed`). Of Codex's ~1000 spans per turn,
 only `session_task.turn` (turn totals) is kept. Raw records are deleted 30
 days after they arrive by a nightly `pg_cron` job
 (`private.prune_telemetry_records()`, 04:17 UTC); usage rows are kept.

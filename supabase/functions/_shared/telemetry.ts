@@ -46,13 +46,25 @@ export interface Parsed {
 }
 
 // Log events never stored: per-tool-call events carry no usage (and Codex's
-// tool results carry tool arguments and output).
+// tool results carry tool arguments and output), and Codex's connection and
+// startup events are high-volume noise that no parser reads.
 export const DROPPED_LOG_EVENTS = new Set([
   "tool_decision",
   "tool_result",
   "codex.tool_decision",
   "codex.tool_result",
+  "codex.startup_phase",
+  "codex.websocket_connect",
+  "codex.websocket_request",
 ]);
+
+// True for log records that are not stored. Of Codex's streaming events
+// (`codex.sse_event`) only `response.completed` is kept: it carries the
+// request's token counts.
+export function isDroppedLog(name: string, a: Attrs): boolean {
+  return DROPPED_LOG_EVENTS.has(name) ||
+    (name === "codex.sse_event" && a["event.kind"] !== "response.completed");
+}
 
 // The only spans stored. Codex emits ~1000 spans per turn; this one carries
 // turn ID and turn token totals, kept for debugging.
@@ -228,7 +240,7 @@ export async function parseLogs(body: Json): Promise<Parsed> {
       for (const lr of sl.logRecords ?? []) {
         const a = attrs(lr.attributes);
         const name = str(a["event.name"]) ?? str(lr.body?.stringValue) ?? "unknown";
-        if (DROPPED_LOG_EVENTS.has(name)) continue;
+        if (isDroppedLog(name, a)) continue;
         const payload = { resource: rl.resource ?? null, scope: sl.scope ?? null, record: lr };
         records.push({
           id: "log:" + (await sha256Hex(JSON.stringify(payload))),

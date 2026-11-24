@@ -3,6 +3,7 @@ import {
   attrs,
   backfillError,
   DROPPED_LOG_EVENTS,
+  isDroppedLog,
   type Parsed,
   parseLogs,
   parseTraces,
@@ -69,6 +70,7 @@ for (const name of ["claude_session", "codex_new_session"]) {
     const uploads = fixture(name);
     const parsed = await parseAll(uploads);
     assert(!parsed.records.some((r) => DROPPED_LOG_EVENTS.has(r.name)));
+    assert(!parsed.records.some((r) => r.name === "codex.sse_event" && attrs(r.payload.record.attributes)["event.kind"] !== "response.completed"));
     let logs = 0, dropped = 0;
     for (const u of uploads.filter((u) => u.path === "/v1/logs")) {
       // deno-lint-ignore no-explicit-any
@@ -76,7 +78,7 @@ for (const name of ["claude_session", "codex_new_session"]) {
         for (const sl of rl.scopeLogs) {
           for (const lr of sl.logRecords) {
             logs++;
-            if (DROPPED_LOG_EVENTS.has(String(attrs(lr.attributes)["event.name"]))) dropped++;
+            if (isDroppedLog(String(attrs(lr.attributes)["event.name"]), attrs(lr.attributes))) dropped++;
           }
         }
       }
