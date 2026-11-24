@@ -315,7 +315,7 @@ function renderBreakdown(rows) {
   if (!b) return;
   const by = state.group === "tool" ? "tool" : "model";
   const what = b.types ? `${b.title} ${state.metric === "tokens" ? "tokens" : "cost"} by type and` : `${b.title} by`;
-  $("bd-title").textContent = `${what} ${by}, ${rangeLabel()}`;
+  $("bd-title").textContent = `${what} ${by}, ${rangeLabel()}` + (state.breakdown === "input" ? " (percent = cache read rate)" : "");
   $("bd-pie-view").hidden = !!b.types;
   $("bd-bar-view").hidden = !b.types;
   if (b.types) renderSlicedBars(rows, b);
@@ -439,7 +439,7 @@ function renderSlicedBars(rows, b) {
       if (all) {
         const rate = document.createElement("span");
         rate.className = "muted";
-        rate.textContent = ` · ${((hit / all) * 100).toFixed(1)}% cache reads`;
+        rate.textContent = ` · ${((hit / all) * 100).toFixed(1)}%`;
         val.append(rate);
       }
     }
