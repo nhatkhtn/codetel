@@ -9,11 +9,11 @@ const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
 const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex" };
 // Claude Code is orange, Codex green. By model, each tool's models get that
-// tool's color family (warm for Claude, greens for Codex): three colors each,
+// tool's color family (warm for Claude, greens for Codex): four colors each,
 // the rest fold into "Other <tool> models".
 const TOOL_COLORS = { claude_code: "--series-2", codex: "--series-3" };
 const FAMILY = { claude_code: "--claude-", codex: "--codex-" };
-const FAMILY_SIZE = 3;
+const FAMILY_SIZE = 4;
 const TOOL_ORDER = { claude_code: 0, codex: 1 };
 const PAGE = 1000;
 
@@ -233,7 +233,7 @@ function renderTiles(rows) {
   $("kpi-cost").textContent = usd(cost);
   $("kpi-requests").textContent = whole.format(requests);
   $("kpi-input").textContent = compact.format(input);
-  $("kpi-input-note").textContent = input ? `${Math.round((cached / input) * 100)}% cache reads` : "";
+  $("kpi-input-note").textContent = input ? `${((cached / input) * 100).toFixed(1)}% cache reads` : "";
   $("kpi-output").textContent = compact.format(output);
 }
 

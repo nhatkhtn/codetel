@@ -22,9 +22,11 @@
   --claude-1: #eb6834;
   --claude-2: #b0301c;
   --claude-3: #eda100;
+  --claude-4: #e87ba4;
   --codex-1: #1baf7a;
   --codex-2: #2f7a00;
   --codex-3: #00a0b8;
+  --codex-4: #8cc63f;
   /* GitHub's contribution greens for the calendar */
   --cal-0: #ebedf0;
   --cal-1: #9be9a8;
@@ -58,9 +60,11 @@
     --claude-1: #d95926;
     --claude-2: #93403d;
     --claude-3: #af7a06;
+    --claude-4: #d55181;
     --codex-1: #199e70;
     --codex-2: #1e710f;
     --codex-3: #299ac4;
+    --codex-4: #6fa32c;
     --cal-0: #2c2c2a;
     --cal-1: #0e4429;
     --cal-2: #006d32;
