@@ -27,7 +27,7 @@ const state = {
   group: "tool",
   metric: "cost", // "cost" or "tokens"
   breakdown: null, // open tile breakdown: "cost", "requests", "input", "output"
-  modelSeries: new Map(), // model -> { key, label, color, order }, fixed by all-time cost
+  modelSeries: new Map(), // model -> { key, label, color, order }, ranked within the selected range
   charts: {},
 };
 
@@ -142,9 +142,20 @@ async function fetchLatest() {
   return data;
 }
 
-// Colors follow the entity: models are ranked once within their tool by
-// all-time cost (then tokens), so changing the range never repaints a model.
+// Models are ranked within their tool by cost (then tokens) over the selected
+// range, so the top FAMILY_SIZE models in view always get their own color.
+// Within a family the pricier model (output cost per output token) gets the
+// darker shade and sits first in the stack.
 function assignModelSeries(rows) {
+  const price = new Map();
+  for (const r of state.rows) {
+    const p = price.get(r.model) ?? { cost: 0, tokens: 0 };
+    p.cost += r.outputCost;
+    p.tokens += r.output;
+    price.set(r.model, p);
+  }
+  const rate = (m) => (price.get(m)?.tokens ? price.get(m).cost / price.get(m).tokens : 0);
+
   const totals = new Map();
   for (const r of rows) {
     const t = totals.get(r.model) ?? { tool: r.tool, cost: 0, tokens: 0 };
@@ -153,12 +164,19 @@ function assignModelSeries(rows) {
     totals.set(r.model, t);
   }
   const ranked = [...totals.entries()].sort((a, b) => b[1].cost - a[1].cost || b[1].tokens - a[1].tokens);
+  const named = {}; // tool -> its top FAMILY_SIZE models, priciest first
   const rank = {};
+  for (const [model, { tool }] of ranked) {
+    rank[tool] = (rank[tool] ?? -1) + 1;
+    if (rank[tool] < FAMILY_SIZE && FAMILY[tool]) (named[tool] ??= []).push(model);
+  }
+  for (const list of Object.values(named)) list.sort((a, b) => rate(b) - rate(a));
+
   state.modelSeries = new Map();
   for (const [model, { tool }] of ranked) {
-    const i = (rank[tool] = (rank[tool] ?? -1) + 1);
+    const i = named[tool]?.indexOf(model) ?? -1;
     const base = (TOOL_ORDER[tool] ?? 2) * 10;
-    state.modelSeries.set(model, i < FAMILY_SIZE && FAMILY[tool]
+    state.modelSeries.set(model, i >= 0
       ? { key: model, label: model, color: FAMILY[tool] + (i + 1), order: base + i }
       : { key: "__other_" + tool, label: `Other ${TOOL_NAMES[tool] ?? tool} models`, color: "--series-other", order: base + 9, other: true });
   }
@@ -196,6 +214,7 @@ function rangeDays() {
 function render() {
   const days = rangeDays();
   const inRange = state.rows.filter((r) => r.day >= days[0] && r.day <= days[days.length - 1]);
+  assignModelSeries(inRange);
 
   for (const b of $("range").querySelectorAll("button")) b.setAttribute("aria-pressed", String(Number(b.dataset.days) === state.days));
   for (const b of $("group").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.group === state.group));
@@ -910,7 +929,6 @@ async function load() {
     [state.rows, state.hourly, state.latest, state.prompts] = await Promise.all([
       fetchRows(), fetchHourly(), fetchLatest(), fetchPrompts(),
     ]);
-    assignModelSeries(state.rows);
     render();
   } catch (e) {
     $("status").textContent = `Could not load usage: ${e.message ?? e}`;
