@@ -21,6 +21,7 @@ enabled is imported once per machine by `backfill/backfill.mjs`.
 | --- | --- |
 | `supabase/migrations/` | Schema, cost view, `usage_daily()` and `usage_hourly()` RPCs, `private.ingest()`, RLS, raw-record cleanup job |
 | `supabase/functions/ingest/` | Edge Function: auth, routing, gzip, DB write |
+| `supabase/functions/archive/` | Edge Function: nightly export of raw records to Storage, 180-day expiry |
 | `supabase/functions/_shared/telemetry.ts` | OTLP parsing, usage and prompt normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |
 | `backfill/backfill.mjs` | One-off import from local transcripts (Node, no dependencies) |
@@ -68,9 +69,26 @@ are kept except tool events (`tool_decision`, `tool_result` and their
 `codex.` versions), which carry no usage, and Codex's connection noise
 (`codex.startup_phase`, `codex.websocket_connect`, `codex.websocket_request`,
 and every `codex.sse_event` except `response.completed`). Of Codex's ~1000 spans per turn,
-only `session_task.turn` (turn totals) is kept. Raw records are deleted 30
-days after they arrive by a nightly `pg_cron` job
-(`private.prune_telemetry_records()`, 04:17 UTC); usage rows are kept.
+only `session_task.turn` (turn totals) is kept. Identity attributes
+(`user.*`, `organization.id`), constant resource attributes (SDK, OS, `env`) and
+`scope` are removed before storing; `host.name`, `service.name` and
+`service.version` stay.
+
+Raw records are archived, not kept in Postgres. A nightly `pg_cron` job
+(every 10 minutes from 03:00 to 04:50 UTC) calls the `archive` Edge Function
+through `pg_net`; each call writes at most 3 parts and returns, so a busy day drains over
+several calls. It writes each
+closed UTC day (by `received_at`) to the private `raw-archive` bucket as
+`YYYY-MM-DD/part-<run>-<n>.jsonl.gz` (one JSON record per line, up to 5,000
+per part), checks the stored size, then deletes those rows. Files older than 180
+days are removed. A crash between upload and delete can leave a duplicate part;
+record IDs are unique, so readers drop repeats. To re-derive data, download the
+day's files, gunzip and replay them. `private.prune_telemetry_records()` (04:17
+UTC) deletes anything still in Postgres after 30 days, as a backstop if the
+archive stops. Usage rows are kept.
+
+The cron job reads the upload secret from Vault. Set it once:
+`select vault.create_secret('<UPLOAD_SECRET>', 'codetel_upload_secret');`
 
 **`model_pricing`** and the **`usage_with_cost`** view: cost is computed at
 query time. Reported cost wins; otherwise the rate set in effect at the
@@ -149,7 +167,7 @@ repo:
 ```sh
 export DENO_DIR=$TMPDIR/deno-dir-codetel
 deno test --allow-read --allow-write --allow-env --allow-net=registry.npmjs.org,jsr.io tests/
-deno check supabase/functions/ingest/index.ts
+deno check supabase/functions/ingest/index.ts supabase/functions/archive/index.ts
 ```
 
 Fixtures come from local OTLP captures, scrubbed by

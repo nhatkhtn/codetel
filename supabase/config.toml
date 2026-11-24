@@ -4,3 +4,7 @@ project_id = "codetel"
 # send a Supabase JWT.
 [functions.ingest]
 verify_jwt = false
+
+# Called by pg_cron through pg_net; checks the upload secret itself.
+[functions.archive]
+verify_jwt = false
