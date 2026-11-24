@@ -51,10 +51,11 @@ model happens in the dashboard.
 
 **`prompt_events`**: one row per prompt submitted, without its text:
 `prompt_length` (characters), `command_name` for Claude slash commands, and
-Codex's `originator` (`codex-tui` interactive, `codex_exec` scripted). Every
+Codex's `originator` (`codex-tui` interactive, `codex_exec` scripted,
+`codex-agent` workers started by the codex-workers skill). Every
 prompt is stored; queries decide which count as yours:
 
-- Codex: `originator` is not `codex_exec`.
+- Codex: `originator` is `codex-tui`.
 - Claude Code: the session has no usage row with `query_source = 'sdk'`.
 
 IDs are Claude's `prompt.id` (the same as transcripts' `promptId`), a hash of

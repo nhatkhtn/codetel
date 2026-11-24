@@ -210,6 +210,7 @@ Deno.test("prompt_hourly counts only your prompts", async () => {
     prompt("c3", { session_id: "scripted" }),
     prompt("x1", { tool: "codex", session_id: "t1", originator: "codex-tui" }),
     prompt("x2", { tool: "codex", session_id: "t2", originator: "codex_exec" }),
+    prompt("x3", { tool: "codex", session_id: "t3", originator: "codex-agent" }),
     prompt("late", { occurred_at: "2026-10-02T03:00:00Z" }),
   ]);
   await ingest(db, [], [
