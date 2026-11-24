@@ -9,7 +9,7 @@ const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
 const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex" };
 // Claude Code is orange, Codex green. By model, each tool's models get that
-// tool's color family (warm for Claude, greens for Codex): four colors each,
+// tool's color family (oranges for Claude, greens for Codex): four shades each,
 // the rest fold into "Other <tool> models".
 const TOOL_COLORS = { claude_code: "--series-2", codex: "--series-3" };
 const FAMILY = { claude_code: "--claude-", codex: "--codex-" };
@@ -370,7 +370,7 @@ function renderSlicedBars(rows, b) {
   const fmt = tokens ? (v) => compact.format(v) : usd;
   const sumTypes = (rs) => picks.map((pick) => rs.reduce((s, r) => s + pick(r), 0));
   const groups = groupSeries(rows, (r) => picks.reduce((s, pick) => s + pick(r), 0));
-  const lines = [{ label: "Total", total: true, parts: sumTypes(rows) }, ...groups.map((g) => ({ ...g, parts: sumTypes(g.rows) }))];
+  const lines = [{ label: "Total", total: true, rows, parts: sumTypes(rows) }, ...groups.map((g) => ({ ...g, parts: sumTypes(g.rows) }))];
   const used = b.types.map((_, i) => lines[0].parts[i] > 0);
   state.bdLines = lines;
   state.bdTypes = b.types;
@@ -413,6 +413,17 @@ function renderSlicedBars(rows, b) {
     const val = document.createElement("div");
     val.className = "bd-val";
     val.textContent = fmt(total);
+    if (b.title === "Input") {
+      // Cache reads over all input (uncached + cache reads + cache writes), in tokens.
+      const all = line.rows.reduce((s, r) => s + r.input + r.cached + r.cacheWrite, 0);
+      const hit = line.rows.reduce((s, r) => s + r.cached, 0);
+      if (all) {
+        const rate = document.createElement("span");
+        rate.className = "muted";
+        rate.textContent = ` · ${((hit / all) * 100).toFixed(1)}% cache reads`;
+        val.append(rate);
+      }
+    }
     const bar = document.createElement("div");
     bar.className = "bd-bar";
     bar.setAttribute("role", "img");
