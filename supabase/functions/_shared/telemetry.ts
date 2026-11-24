@@ -66,6 +66,45 @@ export function isDroppedLog(name: string, a: Attrs): boolean {
     (name === "codex.sse_event" && a["event.kind"] !== "response.completed");
 }
 
+// Attributes removed from stored records. Identity: the same account on every
+// row, so it distinguishes nothing (`host.name` stays: it varies per machine).
+// Resource constants: SDK, OS and environment values that repeat on every
+// record (`service.name` and `service.version` stay), and `scope`, the
+// instrumentation library name and version. Parsers read the full
+// attributes before this runs, so derived rows are unaffected.
+export const STRIPPED_RECORD_ATTRIBUTES = [
+  "user.email",
+  "user.id",
+  "user.account_id",
+  "user.account_uuid",
+  "organization.id",
+];
+export const STRIPPED_RESOURCE_ATTRIBUTES = [
+  "telemetry.sdk.name",
+  "telemetry.sdk.version",
+  "telemetry.sdk.language",
+  "os.type",
+  "os.version",
+  "host.arch",
+  "env",
+];
+
+// deno-lint-ignore no-explicit-any
+function without(list: any, drop: string[]): any {
+  // deno-lint-ignore no-explicit-any
+  return Array.isArray(list) ? list.filter((a: any) => !drop.includes(a?.key)) : list;
+}
+
+// deno-lint-ignore no-explicit-any
+function scrubResource(resource: any): any {
+  return resource?.attributes ? { ...resource, attributes: without(resource.attributes, STRIPPED_RESOURCE_ATTRIBUTES) } : resource;
+}
+
+// deno-lint-ignore no-explicit-any
+function scrubItem(item: any): any {
+  return item?.attributes ? { ...item, attributes: without(item.attributes, STRIPPED_RECORD_ATTRIBUTES) } : item;
+}
+
 // The only spans stored. Codex emits ~1000 spans per turn; this one carries
 // turn ID and turn token totals, kept for debugging.
 const KEPT_SPANS = new Set(["session_task.turn"]);
@@ -243,10 +282,11 @@ export async function parseLogs(body: Json): Promise<Parsed> {
         if (isDroppedLog(name, a)) continue;
         const payload = { resource: rl.resource ?? null, scope: sl.scope ?? null, record: lr };
         records.push({
+          // Hashed before scrubbing, so IDs stay stable for rows stored earlier.
           id: "log:" + (await sha256Hex(JSON.stringify(payload))),
           occurred_at: nanosToIso(lr.timeUnixNano) ?? nanosToIso(lr.observedTimeUnixNano),
           name,
-          payload,
+          payload: { resource: scrubResource(payload.resource), record: scrubItem(lr) },
         });
         const tool = toolOf(resource, sl.scope?.name, name);
         const row = tool === "claude_code" && name === "api_request"
@@ -277,7 +317,7 @@ export function parseTraces(body: Json): Parsed {
           id: `span:${span.traceId}:${span.spanId}`,
           occurred_at: nanosToIso(span.startTimeUnixNano),
           name: span.name,
-          payload: { resource: rs.resource ?? null, scope: ss.scope ?? null, span },
+          payload: { resource: scrubResource(rs.resource ?? null), span: scrubItem(span) },
         });
       }
     }

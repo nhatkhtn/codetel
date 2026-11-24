@@ -196,3 +196,23 @@ Deno.test("backfill prompt rows are validated", () => {
   assert(promptBackfillError({ ...ok, session_id: "" }));
   assert(promptBackfillError({ ...ok, originator: 3 }));
 });
+
+Deno.test("raw records drop identity, constant resource attributes and scope; usage is unchanged", async () => {
+  const dropped = ["user.email", "user.id", "user.account_id", "user.account_uuid", "organization.id"];
+  const droppedResource = ["telemetry.sdk.name", "telemetry.sdk.version", "telemetry.sdk.language", "os.type", "os.version", "host.arch", "env"];
+  for (const name of ["codex_new_session", "codex_resumed_session"]) {
+    const parsed = await parseAll(fixture(name));
+    assert(parsed.records.length > 0 && parsed.usage.length > 0);
+    for (const r of parsed.records) {
+      // deno-lint-ignore no-explicit-any
+      const p = r.payload as any;
+      const item = p.record ?? p.span;
+      const recordKeys = (item.attributes ?? []).map((a: { key: string }) => a.key);
+      const resourceKeys = (p.resource?.attributes ?? []).map((a: { key: string }) => a.key);
+      for (const k of dropped) assert(!recordKeys.includes(k), `${name}: ${r.name} keeps ${k}`);
+      for (const k of droppedResource) assert(!resourceKeys.includes(k), `${name}: ${r.name} keeps resource ${k}`);
+      assert(!("scope" in p), `${name}: ${r.name} keeps scope`);
+      assert(resourceKeys.includes("service.name"), `${name}: ${r.name} lost service.name`);
+    }
+  }
+});
