@@ -5,16 +5,16 @@ CLI, collected from every machine into one Supabase project and shown on a
 static dashboard.
 
 ```text
-Claude Code / Codex built-in OTel exporters, or Antigravity Stop hook (each machine)
+Claude Code / Codex built-in OTel exporters, or an Antigravity CLI hook (each machine)
     -> OTLP HTTP/JSON, Authorization: Bearer <upload secret>
     -> Supabase Edge Function `ingest`
     -> Postgres (raw records + one row per model request and per prompt)
     <- dashboard on GitHub Pages (Supabase Auth email link, read-only via RLS)
 ```
 
-Nothing runs on the machines besides the tools themselves: each tool's exporter
-(or `Stop` hook for Antigravity CLI) is configured to send to the Edge
-Function. Usage from before export was enabled is imported once per machine by
+Nothing in this repo runs on the machines: each tool's exporter (for
+Antigravity CLI, a `Stop` hook) is configured to send to the Edge Function by
+`bootstrap-secrets`. Usage from before export was enabled is imported once per machine by
 `backfill/backfill.mjs`.
 
 ## Layout
@@ -26,7 +26,6 @@ Function. Usage from before export was enabled is imported once per machine by
 | `supabase/functions/archive/` | Edge Function: nightly export of raw records to Storage, 180-day expiry |
 | `supabase/functions/_shared/telemetry.ts` | OTLP parsing, usage and prompt normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |
-| `hooks/antigravity-stop.mjs` | Antigravity CLI `Stop` hook emitting OTLP `/v1/logs` (Node, no dependencies) |
 | `backfill/backfill.mjs` | One-off import from local transcripts (Node, no dependencies) |
 | `docs/` | Dashboard (plain HTML/JS), served by GitHub Pages |
 | `.github/workflows/pages.yml` | Deploys `docs/` to Pages, stamping asset versions |
@@ -112,13 +111,22 @@ break this rule; none are in use.
 
 **Claude Code.** Each `api_request` log carries final usage, cost and IDs.
 
-**Antigravity CLI.** Antigravity CLI has no built-in OTel exporter, so a
-global `Stop` hook (`hooks/antigravity-stop.mjs`) reads new `PLANNER_RESPONSE`
-and `USER_INPUT` entries from the session's `transcript.jsonl` once per turn
-and exports them as OTLP/HTTP JSON to `/v1/logs`, keeping a local step cursor
-in `~/.gemini/antigravity-cli/cache/codetel-state.json`. `input_tokens` in
-Antigravity transcripts is uncached input only, separate from
-`cache_read_tokens`.
+**Antigravity CLI.** Antigravity CLI has no built-in OTel exporter. Its
+machine-side hook (installed by `bootstrap-secrets`) posts OTLP/HTTP JSON to
+`/v1/logs` with `service.name=antigravity-cli` and two events:
+
+- `antigravity.api_request`, one per finished model response: `event.timestamp`,
+  `conversation.id`, `step.index`, `model`, `input_tokens` (uncached input
+  only, separate from `cached_input_tokens`) and `output_tokens`. `cost_usd`
+  and the cache write and reasoning counts are optional.
+- `antigravity.user_prompt`, one per prompt typed by the user:
+  `event.timestamp`, `conversation.id`, `step.index`, `prompt_length` and
+  `originator`.
+
+The row ID is `agy:<conversation.id>:<step.index>`. The backfill builds the
+same ID from the transcripts under `~/.gemini/antigravity-cli/brain`, so a step
+reported by both is stored once. The model name carries the reasoning effort
+(`gemini-4-hydrogen-high`); the dashboard groups the efforts of a model.
 
 ## Machine setup
 
@@ -147,22 +155,8 @@ exporter = { otlp-http = { endpoint = "https://cmbnmbrudyozwsdmecrt.supabase.co/
 trace_exporter = { otlp-http = { endpoint = "https://cmbnmbrudyozwsdmecrt.supabase.co/functions/v1/ingest/v1/traces", protocol = "json", headers = { "authorization" = "Bearer <secret>" } } }
 ```
 
-Antigravity CLI (`~/.gemini/config/hooks.json`, with `CODETEL_INGEST_URL` and
-`CODETEL_UPLOAD_SECRET` exported in your environment or inline):
-
-```json
-{
-  "codetel-stop": {
-    "Stop": [
-      {
-        "type": "command",
-        "command": "CODETEL_INGEST_URL=https://cmbnmbrudyozwsdmecrt.supabase.co/functions/v1/ingest CODETEL_UPLOAD_SECRET=<secret> node /path/to/codetel/hooks/antigravity-stop.mjs",
-        "timeout": 5
-      }
-    ]
-  }
-}
-```
+Antigravity CLI: the `antigravity` group of `bootstrap-secrets` installs the
+hook.
 
 ## Backfill
 
@@ -199,7 +193,7 @@ repo:
 
 ```sh
 export DENO_DIR=$TMPDIR/deno-dir-codetel
-deno test --allow-read --allow-write --allow-env --allow-sys --allow-run --allow-net=registry.npmjs.org,jsr.io tests/
+deno test --allow-read --allow-write --allow-env --allow-net=registry.npmjs.org,jsr.io tests/
 deno check supabase/functions/ingest/index.ts supabase/functions/archive/index.ts
 ```
 

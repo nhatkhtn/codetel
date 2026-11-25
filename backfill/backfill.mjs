@@ -199,7 +199,7 @@ export function antigravitySessionId(file) {
 }
 
 // Parses Antigravity CLI transcript entries into usage and prompt records
-// paired with their step_index so both backfill and the Stop hook share one parser.
+// paired with their step_index.
 export async function parseAntigravityTranscript(file, sessionId = antigravitySessionId(file)) {
   const usage = [];
   const prompts = [];
