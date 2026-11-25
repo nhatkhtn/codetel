@@ -93,11 +93,17 @@ async function fetchAll(fn) {
   return rows;
 }
 
+// Antigravity reports the reasoning effort in the model name
+// (gemini-4-hydrogen-high); the dashboard groups all efforts of a model.
+function displayModel(tool, model) {
+  return tool === "antigravity" ? model.replace(/-(low|medium|high|xhigh)$/, "") : model;
+}
+
 async function fetchRows() {
   return (await fetchAll("usage_daily")).map((r) => ({
     day: r.day,
     tool: r.tool,
-    model: r.model,
+    model: displayModel(r.tool, r.model),
     requests: Number(r.requests),
     input: Number(r.input_tokens),
     cached: Number(r.cached_input_tokens),
