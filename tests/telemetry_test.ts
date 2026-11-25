@@ -88,6 +88,11 @@ for (const name of ["claude_session", "codex_new_session"]) {
   });
 }
 
+Deno.test("claude: MCP connection and plugin load logs are dropped", () => {
+  for (const name of ["mcp_server_connection", "plugin_loaded"]) assert(isDroppedLog(name, {}), name);
+  assert(!isDroppedLog("api_request", {}));
+});
+
 Deno.test("traces: only session_task.turn spans are stored", async () => {
   const parsed = await parseAll(fixture("codex_new_session"));
   const spans = parsed.records.filter((r) => r.id.startsWith("span:"));

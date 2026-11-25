@@ -50,7 +50,9 @@ export interface Parsed {
 
 // Log events never stored: per-tool-call events carry no usage (and Codex's
 // tool results carry tool arguments and output), and Codex's connection and
-// startup events are high-volume noise that no parser reads.
+// startup events and Claude Code's MCP connection and plugin load events are
+// high-volume noise that no parser reads (a fleet of short-lived Claude Code
+// sessions sent about 170k of the latter in a day).
 export const DROPPED_LOG_EVENTS = new Set([
   "tool_decision",
   "tool_result",
@@ -59,6 +61,8 @@ export const DROPPED_LOG_EVENTS = new Set([
   "codex.startup_phase",
   "codex.websocket_connect",
   "codex.websocket_request",
+  "mcp_server_connection",
+  "plugin_loaded",
 ]);
 
 // True for log records that are not stored. Of Codex's streaming events
