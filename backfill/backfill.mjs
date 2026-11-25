@@ -3,10 +3,12 @@
 // enabled, from local Claude Code transcripts, Codex rollouts and Antigravity
 // CLI transcripts, via the ingest function.
 //
-//   node backfill/backfill.mjs --before <ISO time> [--dry-run]
+//   node backfill/backfill.mjs --before <ISO time> [--tool <name>]... [--dry-run]
 //
 // --before is the time OTel export was enabled on this machine; only usage
 // strictly before it is imported, so nothing is counted twice.
+// --tool limits the scan to claude_code, codex or antigravity; repeat it for
+// several. Without it all three are scanned.
 //
 // Environment (not needed for --dry-run):
 //   CODETEL_INGEST_URL     e.g. https://<ref>.supabase.co/functions/v1/ingest
@@ -255,9 +257,14 @@ export async function* antigravityPrompts(file, sessionId) {
   for (const item of prompts) yield item.row;
 }
 
-// Collects usage and prompt rows before the cutoff, keeping the earliest
-// row per ID.
-export async function collect({ claudeDir, codexDirs, antigravityDir, before }) {
+export const TOOLS = ["claude_code", "codex", "antigravity"];
+
+// Collects usage and prompt rows before the cutoff from the chosen tools
+// (default all), keeping the earliest row per ID.
+export async function collect({ claudeDir, codexDirs, antigravityDir, before, tools = TOOLS }) {
+  for (const t of tools) {
+    if (!TOOLS.includes(t)) throw new Error(`unknown tool: ${t} (expected ${TOOLS.join(", ")})`);
+  }
   const cutoff = Date.parse(before);
   if (Number.isNaN(cutoff)) throw new Error(`--before is not a valid time: ${before}`);
   const usage = new Map();
@@ -268,17 +275,17 @@ export async function collect({ claudeDir, codexDirs, antigravityDir, before }) 
     const seen = rows.get(row.id);
     if (!seen || t < Date.parse(seen.occurred_at)) rows.set(row.id, row);
   };
-  for (const f of walk(claudeDir, (n) => n.endsWith(".jsonl"))) {
+  if (tools.includes("claude_code")) for (const f of walk(claudeDir, (n) => n.endsWith(".jsonl"))) {
     for await (const r of claudeRows(f)) add(usage, r);
     for await (const r of claudePrompts(f)) add(prompts, r);
   }
-  for (const dir of codexDirs) {
+  if (tools.includes("codex")) for (const dir of codexDirs) {
     for (const f of walk(dir, (n) => n.startsWith("rollout-") && n.endsWith(".jsonl"))) {
       for await (const r of codexRows(f)) add(usage, r);
       for await (const r of codexPrompts(f)) add(prompts, r);
     }
   }
-  if (antigravityDir) {
+  if (antigravityDir && tools.includes("antigravity")) {
     const suffix = path.join(".system_generated", "logs", "transcript.jsonl");
     for (const f of walk(antigravityDir, (n) => n === "transcript.jsonl")) {
       if (!f.endsWith(suffix)) continue;
@@ -328,10 +335,19 @@ async function upload(key, rows, url, secret) {
 
 async function main() {
   const { values } = parseArgs({
-    options: { before: { type: "string" }, "dry-run": { type: "boolean", default: false } },
+    options: {
+      before: { type: "string" },
+      tool: { type: "string", multiple: true },
+      "dry-run": { type: "boolean", default: false },
+    },
   });
   if (!values.before) {
-    console.error("usage: node backfill/backfill.mjs --before <ISO time> [--dry-run]");
+    console.error("usage: node backfill/backfill.mjs --before <ISO time> [--tool <name>]... [--dry-run]");
+    process.exit(2);
+  }
+  const bad = (values.tool ?? []).filter((t) => !TOOLS.includes(t));
+  if (bad.length) {
+    console.error(`unknown --tool ${bad.join(", ")}; expected ${TOOLS.join(", ")}`);
     process.exit(2);
   }
   const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
@@ -342,6 +358,7 @@ async function main() {
     codexDirs: [path.join(codexHome, "sessions"), path.join(codexHome, "archived_sessions")],
     antigravityDir: path.join(antigravityHome, "brain"),
     before: values.before,
+    tools: values.tool?.length ? values.tool : TOOLS,
   });
 
   console.log(`requests before ${values.before}: ${rows.length}`);

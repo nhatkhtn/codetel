@@ -1,6 +1,6 @@
 // Backfill parsing on small synthetic transcripts shaped like real ones.
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { backfillError, promptBackfillError } from "../supabase/functions/_shared/telemetry.ts";
 // @ts-types="../backfill/backfill.d.ts"
 import { collect } from "../backfill/backfill.mjs";
@@ -101,6 +101,20 @@ Deno.test("backfill collects deduplicated rows before the cutoff", async () => {
     );
     assertEquals(codex2.model, "gpt-6-astra");
     for (const r of rows) assertEquals(backfillError(r), null, r.id);
+
+    const only = async (tools: string[]) => {
+      const c = await collect({
+        claudeDir,
+        codexDirs: [`${dir}/codex/sessions`, `${dir}/codex/archived_sessions`],
+        antigravityDir: `${dir}/antigravity/brain`,
+        before: "2026-10-04T00:00:00Z",
+        tools,
+      });
+      return [...new Set([...c.usage, ...c.prompts].map((r) => r.tool))].sort();
+    };
+    assertEquals(await only(["antigravity"]), ["antigravity"]);
+    assertEquals(await only(["codex", "claude_code"]), ["claude_code", "codex"]);
+    await assertRejects(() => only(["gemini"]), Error, "unknown tool");
     const agyPrompt = agyPrompts.find((p) => p.tool === "antigravity");
     assertEquals(agyPrompt, {
       id: "agy:agy-sess-1:0",

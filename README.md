@@ -177,6 +177,11 @@ CODETEL_UPLOAD_SECRET=<secret> \
 node backfill/backfill.mjs --before 2026-10-28T19:00:00Z
 ```
 
+By default it scans Claude Code, Codex and Antigravity. `--tool claude_code`,
+`--tool codex` or `--tool antigravity` limits the scan to that tool; repeat the
+flag to pick several. Use it when the tools' exporters were enabled at
+different times.
+
 Backfilled Claude rows have no reported cost and are priced from
 `model_pricing`.
 
