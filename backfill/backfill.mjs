@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Imports per-request usage and prompts recorded before OTel export was
-// enabled, from local Claude Code transcripts and Codex rollouts, via the
-// ingest function.
+// enabled, from local Claude Code transcripts, Codex rollouts and Antigravity
+// CLI transcripts, via the ingest function.
 //
 //   node backfill/backfill.mjs --before <ISO time> [--dry-run]
 //
@@ -11,7 +11,8 @@
 // Environment (not needed for --dry-run):
 //   CODETEL_INGEST_URL     e.g. https://<ref>.supabase.co/functions/v1/ingest
 //   CODETEL_UPLOAD_SECRET  the upload secret
-// Optional: CLAUDE_CONFIG_DIR (default ~/.claude), CODEX_HOME (default ~/.codex)
+// Optional: CLAUDE_CONFIG_DIR (~/.claude), CODEX_HOME (~/.codex),
+//           ANTIGRAVITY_HOME (~/.gemini/antigravity-cli)
 //
 // Re-running is safe: rows are keyed by the native request/response/prompt ID.
 
@@ -188,9 +189,75 @@ export async function* codexPrompts(file) {
   }
 }
 
+// Antigravity CLI writes brain/<conversation-id>/.system_generated/logs/transcript.jsonl.
+export function antigravitySessionId(file) {
+  const parts = path.resolve(file).split(path.sep);
+  const idx = parts.lastIndexOf(".system_generated");
+  return idx > 0 ? parts[idx - 1] : null;
+}
+
+// Parses Antigravity CLI transcript entries into usage and prompt records
+// paired with their step_index so both backfill and the Stop hook share one parser.
+export async function parseAntigravityTranscript(file, sessionId = antigravitySessionId(file)) {
+  const usage = [];
+  const prompts = [];
+  if (!sessionId) return { usage, prompts };
+  for await (const e of jsonLines(file)) {
+    const step = e?.step_index;
+    if (!Number.isSafeInteger(step) || step < 0 || !e?.created_at) continue;
+    if (e.type === "PLANNER_RESPONSE" && e.status === "DONE" && e.model) {
+      usage.push({
+        step_index: step,
+        row: {
+          id: `agy:${sessionId}:${step}`,
+          occurred_at: e.created_at,
+          tool: "antigravity",
+          model: e.model,
+          session_id: sessionId,
+          turn_id: null,
+          request_id: null,
+          input_tokens: count(e.input_tokens),
+          cached_input_tokens: count(e.cache_read_tokens),
+          cache_write_tokens: 0,
+          cache_write_5m_tokens: null,
+          cache_write_1h_tokens: null,
+          output_tokens: count(e.output_tokens),
+          reasoning_output_tokens: null,
+          reported_cost_usd: null,
+        },
+      });
+    } else if (e.type === "USER_INPUT" && e.source === "USER_EXPLICIT") {
+      const text = typeof e.content === "string" ? e.content : "";
+      prompts.push({
+        step_index: step,
+        row: {
+          id: `agy:${sessionId}:${step}`,
+          occurred_at: e.created_at,
+          tool: "antigravity",
+          session_id: sessionId,
+          prompt_length: text.length,
+          command_name: null,
+          originator: "antigravity-cli",
+        },
+      });
+    }
+  }
+  return { usage, prompts };
+}
+
+export async function* antigravityRows(file, sessionId) {
+  const { usage } = await parseAntigravityTranscript(file, sessionId);
+  for (const item of usage) yield item.row;
+}
+
+export async function* antigravityPrompts(file, sessionId) {
+  const { prompts } = await parseAntigravityTranscript(file, sessionId);
+  for (const item of prompts) yield item.row;
+}
+
 // Collects usage and prompt rows before the cutoff, keeping the earliest
 // row per ID.
-export async function collect({ claudeDir, codexDirs, before }) {
+export async function collect({ claudeDir, codexDirs, antigravityDir, before }) {
   const cutoff = Date.parse(before);
   if (Number.isNaN(cutoff)) throw new Error(`--before is not a valid time: ${before}`);
   const usage = new Map();
@@ -209,6 +276,14 @@ export async function collect({ claudeDir, codexDirs, before }) {
     for (const f of walk(dir, (n) => n.startsWith("rollout-") && n.endsWith(".jsonl"))) {
       for await (const r of codexRows(f)) add(usage, r);
       for await (const r of codexPrompts(f)) add(prompts, r);
+    }
+  }
+  if (antigravityDir) {
+    const suffix = path.join(".system_generated", "logs", "transcript.jsonl");
+    for (const f of walk(antigravityDir, (n) => n === "transcript.jsonl")) {
+      if (!f.endsWith(suffix)) continue;
+      for await (const r of antigravityRows(f)) add(usage, r);
+      for await (const r of antigravityPrompts(f)) add(prompts, r);
     }
   }
   const sorted = (rows) => [...rows.values()].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
@@ -261,9 +336,11 @@ async function main() {
   }
   const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
   const codexHome = process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+  const antigravityHome = process.env.ANTIGRAVITY_HOME ?? path.join(os.homedir(), ".gemini", "antigravity-cli");
   const { usage: rows, prompts } = await collect({
     claudeDir: path.join(claudeHome, "projects"),
     codexDirs: [path.join(codexHome, "sessions"), path.join(codexHome, "archived_sessions")],
+    antigravityDir: path.join(antigravityHome, "brain"),
     before: values.before,
   });
 

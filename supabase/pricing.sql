@@ -1,7 +1,8 @@
 -- Model prices, USD per million tokens, standard tier.
--- Sources (checked 2026-10-28):
+-- Sources (checked 2026-10-28, Antigravity models checked 2026-11-25):
 --   https://platform.claude.com/docs/en/about-claude/pricing
 --   https://developers.openai.com/api/docs/pricing
+--   https://ai.google.dev/gemini-api/docs/pricing
 -- Fable 5.2: https://platform.claude.com/docs/en/models/fable-5-2/overview
 --
 -- Current prices apply to all history, including backfilled usage
@@ -18,6 +19,7 @@
 -- Claude rows price backfilled transcripts only.
 --
 -- codex-auto-review is free now (it used to be billed at gpt-5.6-luna rates).
+-- Antigravity Gemini 3.8 Flash uses its introductory rate (through 2026-12-31).
 
 insert into public.model_pricing
   (model, effective_from, min_prompt_tokens, input_rate, cached_input_rate, cache_write_short_rate, cache_write_long_rate, output_rate)
@@ -52,7 +54,18 @@ values
   ('gpt-5.6-terra',     '2000-01-01', 272001, 4.00,  0.40,  5.00,  10.00,  18.00),
   ('gpt-5.6-luna',      '2000-01-01', 0,      0.20,  0.02,  0.25,   0.50,   1.20),
   ('gpt-5.6-luna',      '2000-01-01', 272001, 0.40,  0.04,  0.50,   1.00,   1.80),
-  ('codex-auto-review', '2000-01-01', 0,      0.00,  0.00,  0.00,   0.00,   0.00)
+  ('codex-auto-review', '2000-01-01', 0,      0.00,  0.00,  0.00,   0.00,   0.00),
+
+  ('gemini-4-hydrogen-high',   '2000-01-01', 0, 1.50, 0.075, 0.00, null,  7.50),
+  ('gemini-4-hydrogen-xhigh',  '2000-01-01', 0, 1.50, 0.075, 0.00, null,  7.50),
+  ('gemini-4-hydrogen-medium', '2000-01-01', 0, 1.50, 0.075, 0.00, null,  7.50),
+  ('gemini-4-hydrogen-low',    '2000-01-01', 0, 1.50, 0.075, 0.00, null,  7.50),
+  ('gemini-3.8-flash-high',    '2000-01-01', 0, 0.75, 0.075, 0.00, null,  3.75),
+  ('gemini-3.8-flash-medium',  '2000-01-01', 0, 0.75, 0.075, 0.00, null,  3.75),
+  ('gemini-3.8-flash-low',     '2000-01-01', 0, 0.75, 0.075, 0.00, null,  3.75),
+  ('claude-sonnet-4-6',        '2000-01-01', 0, 3.00, 0.30,  3.75, 6.00, 15.00),
+  ('claude-opus-4-6-thinking', '2000-01-01', 0, 5.00, 0.50,  6.25, 10.00, 25.00),
+  ('gpt-oss-120b-medium',      '2000-01-01', 0, 0.15, 0.075, 0.00, null,  0.60)
 on conflict (model, effective_from, min_prompt_tokens) do update set
   input_rate = excluded.input_rate,
   cached_input_rate = excluded.cached_input_rate,

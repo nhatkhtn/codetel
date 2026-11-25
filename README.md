@@ -1,10 +1,11 @@
 # codetel
 
-Token usage, estimated cost and prompts for Claude Code and Codex, collected
-from every machine into one Supabase project and shown on a static dashboard.
+Token usage, estimated cost and prompts for Claude Code, Codex and Antigravity
+CLI, collected from every machine into one Supabase project and shown on a
+static dashboard.
 
 ```text
-Claude Code / Codex built-in OTel exporters (each machine)
+Claude Code / Codex built-in OTel exporters, or Antigravity Stop hook (each machine)
     -> OTLP HTTP/JSON, Authorization: Bearer <upload secret>
     -> Supabase Edge Function `ingest`
     -> Postgres (raw records + one row per model request and per prompt)
@@ -12,8 +13,9 @@ Claude Code / Codex built-in OTel exporters (each machine)
 ```
 
 Nothing runs on the machines besides the tools themselves: each tool's exporter
-is configured to send to the Edge Function. Usage from before export was
-enabled is imported once per machine by `backfill/backfill.mjs`.
+(or `Stop` hook for Antigravity CLI) is configured to send to the Edge
+Function. Usage from before export was enabled is imported once per machine by
+`backfill/backfill.mjs`.
 
 ## Layout
 
@@ -24,6 +26,7 @@ enabled is imported once per machine by `backfill/backfill.mjs`.
 | `supabase/functions/archive/` | Edge Function: nightly export of raw records to Storage, 180-day expiry |
 | `supabase/functions/_shared/telemetry.ts` | OTLP parsing, usage and prompt normalization (pure) |
 | `supabase/pricing.sql` | Model prices (USD per million tokens) |
+| `hooks/antigravity-stop.mjs` | Antigravity CLI `Stop` hook emitting OTLP `/v1/logs` (Node, no dependencies) |
 | `backfill/backfill.mjs` | One-off import from local transcripts (Node, no dependencies) |
 | `docs/` | Dashboard (plain HTML/JS), served by GitHub Pages |
 | `.github/workflows/pages.yml` | Deploys `docs/` to Pages, stamping asset versions |
@@ -44,11 +47,11 @@ model happens in the dashboard.
   (`claude -p`), `repl_main_thread` and others for interactive use.
 - IDs:
 
-  | | Claude Code | Codex (OTel) | Codex (backfill) |
+  | | Claude Code | Codex (OTel) | Codex (backfill) | Antigravity CLI |
   | --- | --- | --- | --- |
-  | `id` | native `request_id` | hash of conversation, event time, model, counts | native `response_id` |
-  | `session_id` | `session.id` | `conversation.id` | `thread_id` |
-  | `turn_id` | `prompt.id` (OTel only) | none in logs | `turn_id` |
+  | `id` | native `request_id` | hash of conversation, event time, model, counts | native `response_id` | `agy:<conversationId>:<step_index>` |
+  | `session_id` | `session.id` | `conversation.id` | `thread_id` | `conversation.id` |
+  | `turn_id` | `prompt.id` (OTel only) | none in logs | `turn_id` | none |
 
 **`prompt_events`**: one row per prompt submitted, without its text:
 `prompt_length` (characters), `command_name` for Claude slash commands, and
@@ -109,6 +112,14 @@ break this rule; none are in use.
 
 **Claude Code.** Each `api_request` log carries final usage, cost and IDs.
 
+**Antigravity CLI.** Antigravity CLI has no built-in OTel exporter, so a
+global `Stop` hook (`hooks/antigravity-stop.mjs`) reads new `PLANNER_RESPONSE`
+and `USER_INPUT` entries from the session's `transcript.jsonl` once per turn
+and exports them as OTLP/HTTP JSON to `/v1/logs`, keeping a local step cursor
+in `~/.gemini/antigravity-cli/cache/codetel-state.json`. `input_tokens` in
+Antigravity transcripts is uncached input only, separate from
+`cache_read_tokens`.
+
 ## Machine setup
 
 Exporter settings and the upload secret are distributed by `bootstrap-secrets`.
@@ -134,6 +145,23 @@ log_user_prompt = false
 metrics_exporter = "none"
 exporter = { otlp-http = { endpoint = "https://cmbnmbrudyozwsdmecrt.supabase.co/functions/v1/ingest/v1/logs", protocol = "json", headers = { "authorization" = "Bearer <secret>" } } }
 trace_exporter = { otlp-http = { endpoint = "https://cmbnmbrudyozwsdmecrt.supabase.co/functions/v1/ingest/v1/traces", protocol = "json", headers = { "authorization" = "Bearer <secret>" } } }
+```
+
+Antigravity CLI (`~/.gemini/config/hooks.json`, with `CODETEL_INGEST_URL` and
+`CODETEL_UPLOAD_SECRET` exported in your environment or inline):
+
+```json
+{
+  "codetel-stop": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "CODETEL_INGEST_URL=https://cmbnmbrudyozwsdmecrt.supabase.co/functions/v1/ingest CODETEL_UPLOAD_SECRET=<secret> node /path/to/codetel/hooks/antigravity-stop.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}
 ```
 
 ## Backfill

@@ -95,7 +95,7 @@ Deno.test("traces: only session_task.turn spans are stored", async () => {
 });
 
 Deno.test("ids are stable when a batch is parsed again", async () => {
-  for (const name of ["codex_new_session", "claude_session"]) {
+  for (const name of ["codex_new_session", "claude_session", "antigravity_session"]) {
     const a = await parseAll(fixture(name));
     const b = await parseAll(fixture(name));
     assertEquals(a.records.map((r) => r.id), b.records.map((r) => r.id));
@@ -168,6 +168,7 @@ Deno.test("backfill rows are validated", () => {
     reported_cost_usd: null,
   };
   assertEquals(backfillError(ok), null);
+  assertEquals(backfillError({ ...ok, tool: "antigravity" }), null);
   assert(backfillError({ ...ok, tool: "other" }));
   assert(backfillError({ ...ok, input_tokens: -1 }));
   assert(backfillError({ ...ok, output_tokens: 1.5 }));
@@ -189,6 +190,7 @@ Deno.test("backfill prompt rows are validated", () => {
     originator: null,
   };
   assertEquals(promptBackfillError(ok), null);
+  assertEquals(promptBackfillError({ ...ok, tool: "antigravity" }), null);
   assertEquals(promptBackfillError({ ...ok, command_name: "compact" }), null);
   assert(promptBackfillError({ ...ok, tool: "other" }));
   assert(promptBackfillError({ ...ok, prompt_length: -1 }));
@@ -215,4 +217,22 @@ Deno.test("raw records drop identity, constant resource attributes and scope; us
       assert(resourceKeys.includes("service.name"), `${name}: ${r.name} lost service.name`);
     }
   }
+});
+
+Deno.test("antigravity: api_request and user_prompt logs become usage and prompt rows", async () => {
+  const parsed = await parseAll(fixture("antigravity_session"));
+  assertEquals(parsed.records.length, 3);
+  assertEquals(parsed.usage.map((r) => [r.id, r.tool, r.model, r.input_tokens, r.cached_input_tokens, r.cache_write_tokens, r.output_tokens]), [
+    ["agy:00000000-0000-4000-8000-000000000010:1", "antigravity", "gemini-4-hydrogen-high", 10927, 0, 0, 535],
+    ["agy:00000000-0000-4000-8000-000000000010:4", "antigravity", "gemini-4-hydrogen-high", 3627, 10928, 0, 291],
+  ]);
+  assertEquals(parsed.prompts, [{
+    id: "agy:00000000-0000-4000-8000-000000000010:0",
+    occurred_at: "2026-11-25T21:19:50Z",
+    tool: "antigravity",
+    session_id: "00000000-0000-4000-8000-000000000010",
+    prompt_length: 42,
+    command_name: null,
+    originator: "antigravity-cli",
+  }]);
 });

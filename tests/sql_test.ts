@@ -211,17 +211,20 @@ Deno.test("prompt_hourly counts only your prompts", async () => {
     prompt("x1", { tool: "codex", session_id: "t1", originator: "codex-tui" }),
     prompt("x2", { tool: "codex", session_id: "t2", originator: "codex_exec" }),
     prompt("x3", { tool: "codex", session_id: "t3", originator: "codex-agent" }),
+    prompt("a1", { tool: "antigravity", session_id: "agy-1", originator: "antigravity-cli" }),
     prompt("late", { occurred_at: "2026-10-02T03:00:00Z" }),
   ]);
   await ingest(db, [], [
     usage({ id: "u1", tool: "claude_code", session_id: "s1", query_source: "repl_main_thread" }),
     usage({ id: "u2", tool: "claude_code", session_id: "scripted", query_source: "sdk" }),
+    usage({ id: "ua", tool: "antigravity", model: "gemini-4-hydrogen-high", session_id: "agy-1" }),
   ]);
   const r = await db.query<Record<string, string>>(
     `select day::text, hour, tool, prompts::int from public.prompt_hourly('2026-10-01', '2026-10-03', 'America/New_York') order by day, hour, tool`,
   );
   // 03:00 UTC on Oct 2 is 23:00 on Oct 1 in New York.
   assertEquals(r.rows.map((x) => [x.day, x.hour, x.tool, x.prompts]), [
+    ["2026-10-01", 8, "antigravity", 1],
     ["2026-10-01", 8, "claude_code", 2],
     ["2026-10-01", 8, "codex", 1],
     ["2026-10-01", 23, "claude_code", 1],
@@ -313,5 +316,5 @@ Deno.test("pricing file loads and has a base row for every model", async () => {
      ))::int as missing, count(*)::int as rows from public.model_pricing p`,
   );
   assertEquals(r.rows[0].missing, 0);
-  assertEquals(r.rows[0].rows, 25);
+  assertEquals(r.rows[0].rows, 35);
 });

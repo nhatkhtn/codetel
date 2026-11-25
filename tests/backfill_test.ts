@@ -70,15 +70,22 @@ Deno.test("backfill collects deduplicated rows before the cutoff", async () => {
     // A resumed session repeats req_a in another file.
     await writeJsonl(`${claudeDir}/-proj/sess-2.jsonl`, [claudeEntry("req_a", "2026-10-02T00:00:00Z", { sessionId: "sess-2" })]);
     await writeJsonl(`${dir}/codex/sessions/2026/10/01/rollout-x.jsonl`, codexLines());
+    await writeJsonl(`${dir}/antigravity/brain/agy-sess-1/.system_generated/logs/transcript.jsonl`, [
+      { type: "USER_INPUT", source: "USER_EXPLICIT", status: "DONE", step_index: 0, created_at: "2026-10-01T12:00:00Z", content: "hello agy" },
+      { type: "PLANNER_RESPONSE", source: "MODEL", status: "DONE", step_index: 1, created_at: "2026-10-01T12:00:01Z", model: "gemini-4-hydrogen-high", input_tokens: 500, cache_read_tokens: 1000, output_tokens: 80 },
+      { type: "PLANNER_RESPONSE", source: "MODEL", status: "STREAMING", step_index: 2, created_at: "2026-10-01T12:00:02Z", model: "gemini-4-hydrogen-high", input_tokens: 1, cache_read_tokens: 0, output_tokens: 1 },
+      { type: "PLANNER_RESPONSE", source: "MODEL", status: "DONE", step_index: 3, created_at: "2026-10-05T00:00:00Z", model: "gemini-4-hydrogen-high", input_tokens: 1, cache_read_tokens: 0, output_tokens: 1 },
+    ]);
 
-    const { usage: rows } = await collect({
+    const { usage: rows, prompts: agyPrompts } = await collect({
       claudeDir,
       codexDirs: [`${dir}/codex/sessions`, `${dir}/codex/archived_sessions`],
+      antigravityDir: `${dir}/antigravity/brain`,
       before: "2026-10-04T00:00:00Z",
     });
 
-    assertEquals(rows.map((r) => r.id), ["req_a", "resp_1", "resp_2"]);
-    const [claude, codex1, codex2] = rows;
+    assertEquals(rows.map((r) => r.id), ["req_a", "resp_1", "agy:agy-sess-1:1", "resp_2"]);
+    const [claude, codex1, agy1, codex2] = rows;
     assertEquals(claude.session_id, "sess-1");
     assertEquals(
       [claude.input_tokens, claude.cached_input_tokens, claude.cache_write_tokens, claude.cache_write_5m_tokens, claude.cache_write_1h_tokens, claude.output_tokens],
@@ -88,8 +95,23 @@ Deno.test("backfill collects deduplicated rows before the cutoff", async () => {
       [codex1.model, codex1.turn_id, codex1.input_tokens, codex1.cached_input_tokens, codex1.output_tokens, codex1.reasoning_output_tokens],
       ["gpt-6.1-sol", "turn-1", 4859, 12288, 48, 7],
     );
+    assertEquals(
+      [agy1.tool, agy1.model, agy1.session_id, agy1.input_tokens, agy1.cached_input_tokens, agy1.cache_write_tokens, agy1.output_tokens],
+      ["antigravity", "gemini-4-hydrogen-high", "agy-sess-1", 500, 1000, 0, 80],
+    );
     assertEquals(codex2.model, "gpt-6-astra");
     for (const r of rows) assertEquals(backfillError(r), null, r.id);
+    const agyPrompt = agyPrompts.find((p) => p.tool === "antigravity");
+    assertEquals(agyPrompt, {
+      id: "agy:agy-sess-1:0",
+      occurred_at: "2026-10-01T12:00:00Z",
+      tool: "antigravity",
+      session_id: "agy-sess-1",
+      prompt_length: 9,
+      command_name: null,
+      originator: "antigravity-cli",
+    });
+    assertEquals(promptBackfillError(agyPrompt!), null);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

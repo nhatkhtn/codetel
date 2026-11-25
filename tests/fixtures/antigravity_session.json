@@ -1,0 +1,67 @@
+[
+ {
+  "path": "/v1/logs",
+  "body": {
+   "resourceLogs": [
+    {
+     "resource": {
+      "attributes": [
+       { "key": "service.name", "value": { "stringValue": "antigravity-cli" } },
+       { "key": "host.name", "value": { "stringValue": "[scrubbed]" } }
+      ]
+     },
+     "scopeLogs": [
+      {
+       "scope": { "name": "codetel.antigravity_hook", "version": "1.0.0" },
+       "logRecords": [
+        {
+         "timeUnixNano": "1795641590000000000",
+         "observedTimeUnixNano": "1795641590000000000",
+         "body": { "stringValue": "antigravity.user_prompt" },
+         "attributes": [
+          { "key": "event.name", "value": { "stringValue": "antigravity.user_prompt" } },
+          { "key": "event.timestamp", "value": { "stringValue": "2026-11-25T21:19:50Z" } },
+          { "key": "conversation.id", "value": { "stringValue": "00000000-0000-4000-8000-000000000010" } },
+          { "key": "step.index", "value": { "intValue": "0" } },
+          { "key": "prompt_length", "value": { "intValue": "42" } },
+          { "key": "originator", "value": { "stringValue": "antigravity-cli" } }
+         ]
+        },
+        {
+         "timeUnixNano": "1795641590000000000",
+         "observedTimeUnixNano": "1795641590000000000",
+         "body": { "stringValue": "antigravity.api_request" },
+         "attributes": [
+          { "key": "event.name", "value": { "stringValue": "antigravity.api_request" } },
+          { "key": "event.timestamp", "value": { "stringValue": "2026-11-25T21:19:50Z" } },
+          { "key": "conversation.id", "value": { "stringValue": "00000000-0000-4000-8000-000000000010" } },
+          { "key": "step.index", "value": { "intValue": "1" } },
+          { "key": "model", "value": { "stringValue": "gemini-4-hydrogen-high" } },
+          { "key": "input_tokens", "value": { "intValue": "10927" } },
+          { "key": "cached_input_tokens", "value": { "intValue": "0" } },
+          { "key": "output_tokens", "value": { "intValue": "535" } }
+         ]
+        },
+        {
+         "timeUnixNano": "1795641597000000000",
+         "observedTimeUnixNano": "1795641597000000000",
+         "body": { "stringValue": "antigravity.api_request" },
+         "attributes": [
+          { "key": "event.name", "value": { "stringValue": "antigravity.api_request" } },
+          { "key": "event.timestamp", "value": { "stringValue": "2026-11-25T21:19:57Z" } },
+          { "key": "conversation.id", "value": { "stringValue": "00000000-0000-4000-8000-000000000010" } },
+          { "key": "step.index", "value": { "intValue": "4" } },
+          { "key": "model", "value": { "stringValue": "gemini-4-hydrogen-high" } },
+          { "key": "input_tokens", "value": { "intValue": "3627" } },
+          { "key": "cached_input_tokens", "value": { "intValue": "10928" } },
+          { "key": "output_tokens", "value": { "intValue": "291" } }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+]

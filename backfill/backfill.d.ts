@@ -2,8 +2,10 @@ import type { PromptEvent, UsageEvent } from "../supabase/functions/_shared/tele
 
 export function claudeRows(file: string): AsyncGenerator<UsageEvent>;
 export function codexRows(file: string): AsyncGenerator<UsageEvent>;
+export function antigravityRows(file: string, sessionId?: string | null): AsyncGenerator<UsageEvent>;
 export function claudePrompts(file: string): AsyncGenerator<PromptEvent>;
 export function codexPrompts(file: string): AsyncGenerator<PromptEvent>;
+export function antigravityPrompts(file: string, sessionId?: string | null): AsyncGenerator<PromptEvent>;
 export function collect(
-  options: { claudeDir: string; codexDirs: string[]; before: string },
+  options: { claudeDir: string; codexDirs: string[]; antigravityDir?: string; before: string },
 ): Promise<{ usage: UsageEvent[]; prompts: PromptEvent[] }>;

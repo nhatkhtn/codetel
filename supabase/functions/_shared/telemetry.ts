@@ -1,7 +1,10 @@
-// Turns OTLP/HTTP JSON batches from Claude Code and Codex into raw records,
-// normalized per-request usage rows and prompt rows. Pure functions; no I/O.
+// Turns OTLP/HTTP JSON batches from Claude Code, Codex and Antigravity CLI
+// into raw records, normalized per-request usage rows and prompt rows. Pure
+// functions; no I/O.
 
-export type Tool = "claude_code" | "codex";
+export type Tool = "claude_code" | "codex" | "antigravity";
+
+const VALID_TOOLS = new Set<string>(["claude_code", "codex", "antigravity"]);
 
 export interface RawRecord {
   id: string;
@@ -164,6 +167,9 @@ function toolOf(resource: Attrs, scopeName: string | undefined, eventName: strin
   if (eventName.startsWith("codex.") || String(resource["service.name"] ?? "").startsWith("codex")) {
     return "codex";
   }
+  if (eventName.startsWith("antigravity.") || String(resource["service.name"] ?? "").startsWith("antigravity")) {
+    return "antigravity";
+  }
   return null;
 }
 
@@ -269,6 +275,61 @@ async function codexUsage(a: Attrs): Promise<UsageEvent | null> {
   };
 }
 
+function antigravityStepId(session: string, a: Attrs): string | null {
+  const explicit = str(a["request_id"]) ?? str(a["prompt.id"]);
+  if (explicit) return explicit;
+  const rawStep = a["step.index"];
+  if (rawStep == null) return null;
+  const step = typeof rawStep === "number" ? rawStep : Number(rawStep);
+  if (!Number.isSafeInteger(step) || step < 0) return null;
+  return `agy:${session}:${step}`;
+}
+
+function antigravityUsage(a: Attrs): UsageEvent | null {
+  const session = str(a["conversation.id"]);
+  const model = str(a["model"]);
+  const at = str(a["event.timestamp"]);
+  if (!session || !model || !at) return null;
+  const id = antigravityStepId(session, a);
+  if (!id) return null;
+  const cost = a["cost_usd"];
+  return {
+    id,
+    occurred_at: at,
+    tool: "antigravity",
+    model,
+    session_id: session,
+    turn_id: null,
+    request_id: str(a["request_id"]),
+    input_tokens: int(a["input_tokens"]),
+    cached_input_tokens: int(a["cached_input_tokens"]),
+    cache_write_tokens: int(a["cache_write_tokens"]),
+    cache_write_5m_tokens: null,
+    cache_write_1h_tokens: null,
+    output_tokens: int(a["output_tokens"]),
+    reasoning_output_tokens: intOrNull(a["reasoning_output_tokens"]),
+    reported_cost_usd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+    query_source: str(a["query_source"]),
+  };
+}
+
+function antigravityPrompt(a: Attrs): PromptEvent | null {
+  const session = str(a["conversation.id"]);
+  const at = str(a["event.timestamp"]);
+  if (!session || !at) return null;
+  const id = antigravityStepId(session, a);
+  if (!id) return null;
+  return {
+    id,
+    occurred_at: at,
+    tool: "antigravity",
+    session_id: session,
+    prompt_length: int(a["prompt_length"]),
+    command_name: str(a["command_name"]),
+    originator: str(a["originator"]),
+  };
+}
+
 export async function parseLogs(body: Json): Promise<Parsed> {
   const records: RawRecord[] = [];
   const usage: UsageEvent[] = [];
@@ -293,12 +354,16 @@ export async function parseLogs(body: Json): Promise<Parsed> {
           ? claudeUsage(a)
           : tool === "codex" && name === "codex.sse_event"
           ? await codexUsage(a)
+          : tool === "antigravity" && name === "antigravity.api_request"
+          ? antigravityUsage(a)
           : null;
         if (row) usage.push(row);
         const prompt = tool === "claude_code" && name === "user_prompt"
           ? claudePrompt(a)
           : tool === "codex" && name === "codex.user_prompt"
           ? await codexPrompt(a)
+          : tool === "antigravity" && name === "antigravity.user_prompt"
+          ? antigravityPrompt(a)
           : null;
         if (prompt) prompts.push(prompt);
       }
@@ -344,7 +409,7 @@ export function backfillError(row: Json): string | null {
     if (typeof row[f] !== "string" || row[f] === "") return `${f} must be a non-empty string`;
   }
   if (Number.isNaN(Date.parse(row.occurred_at))) return "occurred_at is not a timestamp";
-  if (row.tool !== "claude_code" && row.tool !== "codex") return "tool must be claude_code or codex";
+  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex or antigravity";
   for (const f of ["turn_id", "request_id"]) {
     if (row[f] != null && typeof row[f] !== "string") return `${f} must be a string or null`;
   }
@@ -368,7 +433,7 @@ export function promptBackfillError(row: Json): string | null {
     if (typeof row[f] !== "string" || row[f] === "") return `${f} must be a non-empty string`;
   }
   if (Number.isNaN(Date.parse(row.occurred_at))) return "occurred_at is not a timestamp";
-  if (row.tool !== "claude_code" && row.tool !== "codex") return "tool must be claude_code or codex";
+  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex or antigravity";
   if (!Number.isSafeInteger(row.prompt_length) || row.prompt_length < 0) return "prompt_length must be a non-negative integer";
   for (const f of ["command_name", "originator"]) {
     if (row[f] != null && typeof row[f] !== "string") return `${f} must be a string or null`;

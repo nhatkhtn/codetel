@@ -7,14 +7,14 @@
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
-const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex" };
-// Claude Code is orange, Codex green. By model, each tool's models get that
-// tool's color family (oranges for Claude, greens for Codex): four shades each,
-// the rest fold into "Other <tool> models".
-const TOOL_COLORS = { claude_code: "--series-2", codex: "--series-3" };
-const FAMILY = { claude_code: "--claude-", codex: "--codex-" };
+const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
+// Claude Code is orange, Codex green, Antigravity blue. By model, each tool's
+// models get that tool's color family (oranges for Claude, greens for Codex,
+// blues for Antigravity): four shades each, the rest fold into "Other <tool> models".
+const TOOL_COLORS = { claude_code: "--series-2", codex: "--series-3", antigravity: "--series-1" };
+const FAMILY = { claude_code: "--claude-", codex: "--codex-", antigravity: "--antigravity-" };
 const FAMILY_SIZE = 4;
-const TOOL_ORDER = { claude_code: 0, codex: 1 };
+const TOOL_ORDER = { claude_code: 0, codex: 1, antigravity: 2 };
 const PAGE = 1000;
 
 const state = {
@@ -175,7 +175,7 @@ function assignModelSeries(rows) {
   state.modelSeries = new Map();
   for (const [model, { tool }] of ranked) {
     const i = named[tool]?.indexOf(model) ?? -1;
-    const base = (TOOL_ORDER[tool] ?? 2) * 10;
+    const base = (TOOL_ORDER[tool] ?? 3) * 10;
     state.modelSeries.set(model, i >= 0
       ? { key: model, label: model, color: FAMILY[tool] + (i + 1), order: base + i }
       : { key: "__other_" + tool, label: `Other ${TOOL_NAMES[tool] ?? tool} models`, color: "--series-other", order: base + 9, other: true });
@@ -260,6 +260,7 @@ function renderTiles(rows) {
 // Input and output: one full-width bar per tool or model, sliced by token type,
 // in tokens or in cost (the Cost / Tokens switch).
 const reasoningShare = (r) => (r.output ? r.reasoning / r.output : 0);
+const unsplitOutput = (r) => r.tool === "claude_code" || r.tool === "antigravity";
 const BREAKDOWNS = {
   cost: { title: "Estimated cost", fmt: (v) => usd(v), pick: (r) => r.cost },
   requests: { title: "Requests", fmt: (v) => whole.format(v), pick: (r) => r.requests },
@@ -268,18 +269,18 @@ const BREAKDOWNS = {
     { label: "Uncached input", color: "--series-5", tokens: (r) => r.input, cost: (r) => r.inputCost },
     { label: "Cache writes", color: "--series-7", tokens: (r) => r.cacheWrite, cost: (r) => r.cacheWriteCost },
   ] },
-  // Claude Code does not report reasoning separately, so its output stays whole.
+  // Claude Code and Antigravity do not report reasoning separately, so their output stays whole.
   // Reasoning is billed as output, so its cost is its share of the output cost.
   output: { title: "Output", types: [
     { label: "Response", color: "--series-1",
-      tokens: (r) => (r.tool === "claude_code" ? 0 : r.output - r.reasoning),
-      cost: (r) => (r.tool === "claude_code" ? 0 : r.outputCost * (1 - reasoningShare(r))) },
+      tokens: (r) => (unsplitOutput(r) ? 0 : r.output - r.reasoning),
+      cost: (r) => (unsplitOutput(r) ? 0 : r.outputCost * (1 - reasoningShare(r))) },
     { label: "Reasoning", color: "--series-5",
-      tokens: (r) => (r.tool === "claude_code" ? 0 : r.reasoning),
-      cost: (r) => (r.tool === "claude_code" ? 0 : r.outputCost * reasoningShare(r)) },
-    { label: "Not split (Claude)", color: "--series-other",
-      tokens: (r) => (r.tool === "claude_code" ? r.output : 0),
-      cost: (r) => (r.tool === "claude_code" ? r.outputCost : 0) },
+      tokens: (r) => (unsplitOutput(r) ? 0 : r.reasoning),
+      cost: (r) => (unsplitOutput(r) ? 0 : r.outputCost * reasoningShare(r)) },
+    { label: "Not split", color: "--series-other",
+      tokens: (r) => (unsplitOutput(r) ? r.output : 0),
+      cost: (r) => (unsplitOutput(r) ? r.outputCost : 0) },
   ] },
 };
 
@@ -659,7 +660,7 @@ function renderCalendar() {
     place(el, (i % 7) + 2, week + 2);
   });
   grid.setAttribute("aria-label", "Your prompts per day over the last 12 months");
-  $("cal-sub").textContent = "Prompts you sent per day, in Claude Code and Codex.";
+  $("cal-sub").textContent = "Prompts you sent per day, in Claude Code, Codex, and Antigravity.";
   $("cal-summary").textContent = `${plural(total, "prompt")} in total, ${plural(active, "active day")}.`;
   const wrap = $("cal-wrap");
   wrap.scrollLeft = wrap.scrollWidth;
