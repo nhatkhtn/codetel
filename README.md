@@ -194,7 +194,7 @@ repo:
 
 ```sh
 export DENO_DIR=$TMPDIR/deno-dir-codetel
-deno test --allow-read --allow-write --allow-env --allow-net=registry.npmjs.org,jsr.io tests/
+deno test --allow-read --allow-write --allow-env --allow-sys --allow-run --allow-net=registry.npmjs.org,jsr.io tests/
 deno check supabase/functions/ingest/index.ts supabase/functions/archive/index.ts
 ```
 
