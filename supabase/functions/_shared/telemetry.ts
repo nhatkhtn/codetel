@@ -1,10 +1,10 @@
-// Turns OTLP/HTTP JSON batches from Claude Code, Codex and Antigravity CLI
+// Turns OTLP/HTTP JSON batches from Claude Code, Codex, Antigravity CLI and UF NaviGator
 // into raw records, normalized per-request usage rows and prompt rows. Pure
 // functions; no I/O.
 
-export type Tool = "claude_code" | "codex" | "antigravity";
+export type Tool = "claude_code" | "codex" | "antigravity" | "navigator";
 
-const VALID_TOOLS = new Set<string>(["claude_code", "codex", "antigravity"]);
+const VALID_TOOLS = new Set<string>(["claude_code", "codex", "antigravity", "navigator"]);
 
 export interface RawRecord {
   id: string;
@@ -174,6 +174,9 @@ function toolOf(resource: Attrs, scopeName: string | undefined, eventName: strin
   if (eventName.startsWith("antigravity.") || String(resource["service.name"] ?? "").startsWith("antigravity")) {
     return "antigravity";
   }
+  if (eventName.startsWith("navigator.") || String(resource["service.name"] ?? "").startsWith("navigator")) {
+    return "navigator";
+  }
   return null;
 }
 
@@ -317,6 +320,34 @@ function antigravityUsage(a: Attrs): UsageEvent | null {
   };
 }
 
+// UF NaviGator calls, reported by bootstrap-secrets' credential proxy: one
+// navigator.api_request per call that returned a usage block. The proxy
+// generates the request_id, so each call has one row.
+function navigatorUsage(a: Attrs): UsageEvent | null {
+  const id = str(a["request_id"]);
+  const session = str(a["session.id"]);
+  const model = str(a["model"]);
+  const at = str(a["event.timestamp"]);
+  if (!id || !session || !model || !at) return null;
+  return {
+    id,
+    occurred_at: at,
+    tool: "navigator",
+    model,
+    session_id: session,
+    turn_id: null,
+    request_id: id,
+    input_tokens: int(a["input_tokens"]),
+    cached_input_tokens: int(a["cached_input_tokens"]),
+    cache_write_tokens: 0,
+    cache_write_5m_tokens: null,
+    cache_write_1h_tokens: null,
+    output_tokens: int(a["output_tokens"]),
+    reasoning_output_tokens: intOrNull(a["reasoning_output_tokens"]),
+    reported_cost_usd: null,
+  };
+}
+
 function antigravityPrompt(a: Attrs): PromptEvent | null {
   const session = str(a["conversation.id"]);
   const at = str(a["event.timestamp"]);
@@ -360,6 +391,8 @@ export async function parseLogs(body: Json): Promise<Parsed> {
           ? await codexUsage(a)
           : tool === "antigravity" && name === "antigravity.api_request"
           ? antigravityUsage(a)
+          : tool === "navigator" && name === "navigator.api_request"
+          ? navigatorUsage(a)
           : null;
         if (row) usage.push(row);
         const prompt = tool === "claude_code" && name === "user_prompt"
@@ -413,7 +446,7 @@ export function backfillError(row: Json): string | null {
     if (typeof row[f] !== "string" || row[f] === "") return `${f} must be a non-empty string`;
   }
   if (Number.isNaN(Date.parse(row.occurred_at))) return "occurred_at is not a timestamp";
-  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex or antigravity";
+  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex, antigravity or navigator";
   for (const f of ["turn_id", "request_id"]) {
     if (row[f] != null && typeof row[f] !== "string") return `${f} must be a string or null`;
   }
@@ -437,7 +470,7 @@ export function promptBackfillError(row: Json): string | null {
     if (typeof row[f] !== "string" || row[f] === "") return `${f} must be a non-empty string`;
   }
   if (Number.isNaN(Date.parse(row.occurred_at))) return "occurred_at is not a timestamp";
-  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex or antigravity";
+  if (!VALID_TOOLS.has(row.tool)) return "tool must be claude_code, codex, antigravity or navigator";
   if (!Number.isSafeInteger(row.prompt_length) || row.prompt_length < 0) return "prompt_length must be a non-negative integer";
   for (const f of ["command_name", "originator"]) {
     if (row[f] != null && typeof row[f] !== "string") return `${f} must be a string or null`;

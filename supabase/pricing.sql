@@ -65,7 +65,11 @@ values
   ('gemini-3.8-flash-low',     '2000-01-01', 0, 0.75, 0.075, 0.00, null,  3.75),
   ('claude-sonnet-4-6',        '2000-01-01', 0, 3.00, 0.30,  3.75, 6.00, 15.00),
   ('claude-opus-4-6-thinking', '2000-01-01', 0, 5.00, 0.50,  6.25, 10.00, 25.00),
-  ('gpt-oss-120b-medium',      '2000-01-01', 0, 0.15, 0.075, 0.00, null,  0.60)
+  ('gpt-oss-120b-medium',      '2000-01-01', 0, 0.15, 0.075, 0.00, null,  0.60),
+
+  ('gpt-oss-120b',                '2000-01-01', 0, 0.06, 0.06, 0.00, null, 0.15),
+  ('meta-muse-glimmer-30b',       '2000-01-01', 0, 0.35, 0.35, 0.00, null, 1.50),
+  ('nemotron-3-super-120b-a12b',  '2000-01-01', 0, 0.06, 0.06, 0.00, null, 0.24)
 on conflict (model, effective_from, min_prompt_tokens) do update set
   input_rate = excluded.input_rate,
   cached_input_rate = excluded.cached_input_rate,

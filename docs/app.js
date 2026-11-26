@@ -7,7 +7,7 @@
 const { supabaseUrl, supabaseKey } = window.CODETEL_CONFIG;
 const db = window.supabase.createClient(supabaseUrl, supabaseKey);
 
-const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
+const TOOL_NAMES = { claude_code: "Claude Code", codex: "Codex", antigravity: "Antigravity", navigator: "NaviGator" };
 // Claude Code is orange, Codex green, Antigravity blue. By model, each tool's
 // models get that tool's color family (oranges for Claude, greens for Codex,
 // blues for Antigravity): four shades each, the rest fold into "Other <tool> models".

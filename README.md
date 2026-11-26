@@ -1,6 +1,6 @@
 # codetel
 
-Token usage, estimated cost and prompts for Claude Code, Codex and Antigravity
+Token usage, estimated cost and prompts for Claude Code, Codex, Antigravity and UF NaviGator
 CLI, collected from every machine into one Supabase project and shown on a
 static dashboard.
 
@@ -110,6 +110,14 @@ turn span's token totals. Models without a default reasoning level would
 break this rule; none are in use.
 
 **Claude Code.** Each `api_request` log carries final usage, cost and IDs.
+
+**UF NaviGator.** The credential proxy of `bootstrap-secrets` posts one
+`navigator.api_request` log to `/v1/logs` (`service.name=navigator-proxy`) for
+each model call that returns a `usage` block: `event.timestamp`, `request_id`
+(the row ID, generated per call), `session.id` (`navigator:<host>`), `model`,
+`input_tokens` (uncached only), `cached_input_tokens`, `output_tokens` and
+`reasoning_output_tokens`. NaviGator has no cache-write charge, so
+`cache_write_tokens` is 0.
 
 **Antigravity CLI.** Antigravity CLI has no built-in OTel exporter. Its
 machine-side hook (installed by `bootstrap-secrets`) posts OTLP/HTTP JSON to

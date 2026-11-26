@@ -241,3 +241,39 @@ Deno.test("antigravity: api_request and user_prompt logs become usage and prompt
     originator: "antigravity-cli",
   }]);
 });
+
+Deno.test("navigator: api_request from the credential proxy becomes a usage row", async () => {
+  const str = (key: string, v: string) => ({ key, value: { stringValue: v } });
+  const int = (key: string, v: number) => ({ key, value: { intValue: String(v) } });
+  const body = {
+    resourceLogs: [{
+      resource: { attributes: [str("service.name", "navigator-proxy")] },
+      scopeLogs: [{
+        scope: { name: "codetel.navigator_proxy" },
+        logRecords: [{
+          timeUnixNano: "1795000000000000000",
+          body: { stringValue: "navigator.api_request" },
+          attributes: [
+            str("event.name", "navigator.api_request"),
+            str("event.timestamp", "2026-11-26T12:00:00.000Z"),
+            str("request_id", "navigator:abc"),
+            str("session.id", "navigator:host1"),
+            str("model", "gpt-oss-120b"),
+            int("input_tokens", 100),
+            int("cached_input_tokens", 0),
+            int("output_tokens", 20),
+            int("reasoning_output_tokens", 5),
+          ],
+        }],
+      }],
+    }],
+  };
+  const parsed = await parseLogs(body);
+  assertEquals(parsed.usage.length, 1);
+  const u = parsed.usage[0];
+  assertEquals(
+    [u.id, u.tool, u.model, u.session_id, u.input_tokens, u.cache_write_tokens, u.output_tokens, u.reasoning_output_tokens],
+    ["navigator:abc", "navigator", "gpt-oss-120b", "navigator:host1", 100, 0, 20, 5],
+  );
+  assertEquals(backfillError({ ...u }), null);
+});
